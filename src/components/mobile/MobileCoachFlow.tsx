@@ -27,14 +27,15 @@ import {
 } from './MobileCoachFlowPart2';
 import { MobileLiveSession } from './MobileLiveSession';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { auth } from '../../lib/firebase';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '../../lib/firebase';
 import { BrevoService } from '../../services/brevo';
 import { getAllAthletes } from '../../services/athleteCoachService';
 import { useAuth } from '../../contexts/FirebaseAuthContext';
 import { useUser } from '../../contexts/UserContext';
 
-/** Screens that require login - temporarily disabled for dev */
-const PROTECTED_SCREENS: number[] = [];
+/** Screens that require login (all except login screen 0) */
+const PROTECTED_SCREENS: number[] = [1, 2, 3, 4, 5, 6];
 
 export function MobileCoachFlow({ 
   currentScreen, 
@@ -157,17 +158,28 @@ function MobileCoachLogin({ onNavigate }: { onNavigate: (screen: number) => void
       // Navigate to Team Roster after successful login
       onNavigate(1);
     } catch (err: any) {
-      console.error('Google login error:', err);
+      const msg = err?.error?.message ?? err?.data?.error?.message ?? err?.message;
+      const isInvalidCreds = msg === 'INVALID_LOGIN_CREDENTIALS' || err?.code === 'auth/invalid-credential';
+      console.error('Google login error:', { err, message: msg, data: err?.data, error: err?.error });
+
       let errorMessage = 'Google sign-in failed. Please try again.';
-      
-      if (err.code === 'auth/popup-closed-by-user') {
+
+      if (isInvalidCreds) {
+        errorMessage = 'Google sign-in could not complete. Use email/password to sign in, or ensure the app has iOS Google setup (GoogleService-Info.plist + URL scheme). See GOOGLE_SIGNIN_XCODE_TROUBLESHOOTING.md.';
+      } else if (err?.code === 'auth/popup-closed-by-user') {
         errorMessage = 'Sign-in popup was closed. Please try again.';
-      } else if (err.code === 'auth/popup-blocked') {
+      } else if (err?.code === 'auth/popup-blocked') {
         errorMessage = 'Popup was blocked. Please allow popups and try again.';
-      } else if (err.code === 'auth/network-request-failed') {
+      } else if (err?.code === 'auth/network-request-failed') {
         errorMessage = 'Network error. Please check your connection.';
+      } else if (err?.code === 'auth/operation-not-allowed') {
+        errorMessage = 'Google sign-in is not enabled for this app. Contact support.';
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        errorMessage = 'This app is not authorized for sign-in. Contact support.';
+      } else if (err?.code || err?.message) {
+        errorMessage = err?.message || msg || `${err?.code}. See GOOGLE_SIGNIN_XCODE_TROUBLESHOOTING.md`;
       }
-      
+
       setError(errorMessage);
     } finally {
       setGoogleLoading(false);
@@ -200,32 +212,39 @@ function MobileCoachLogin({ onNavigate }: { onNavigate: (screen: number) => void
       // Navigate to Team Roster after successful login
       onNavigate(1);
     } catch (err: any) {
-      console.error('Login error:', err);
+      const code = err?.code ?? err?.data?.error?.message ?? '';
+      const msg = err?.message ?? '';
+      console.error('Login error:', { code, message: msg, full: err });
       let errorMessage = 'Login failed. Please try again.';
-      
-      switch (err.code) {
-        case 'auth/user-not-found':
-          errorMessage = 'No account found with this email address.';
-          break;
-        case 'auth/wrong-password':
-          errorMessage = 'Incorrect password.';
-          break;
-        case 'auth/invalid-email':
-          errorMessage = 'Invalid email address.';
-          break;
-        case 'auth/user-disabled':
-          errorMessage = 'This account has been disabled.';
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = 'Too many failed attempts. Please try again later.';
-          break;
-        case 'auth/network-request-failed':
-          errorMessage = 'Network error. Please check your connection.';
-          break;
-        default:
-          errorMessage = err.message || 'Login failed. Please try again.';
+      const backendMsg = err?.data?.error?.message;
+
+      if (backendMsg === 'INVALID_LOGIN_CREDENTIALS' || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect email or password. If you signed up with Google, use the "Sign in with Google" button instead.';
+      } else {
+        switch (err.code) {
+          case 'auth/user-not-found':
+            errorMessage = 'No account found with this email address. Use Sign in with Google if you created the account with Google.';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = 'Invalid email address.';
+            break;
+          case 'auth/user-disabled':
+            errorMessage = 'This account has been disabled.';
+            break;
+          case 'auth/too-many-requests':
+            errorMessage = 'Too many failed attempts. Please try again later.';
+            break;
+          case 'auth/network-request-failed':
+            errorMessage = 'Network error. Please check your connection.';
+            break;
+          case 'auth/operation-not-allowed':
+            errorMessage = 'Email/password sign-in is not enabled. Use Sign in with Google or contact support.';
+            break;
+          default:
+            errorMessage = msg || 'Login failed. Please try again.';
+        }
       }
-      
+
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -357,6 +376,17 @@ function MobileCoachLogin({ onNavigate }: { onNavigate: (screen: number) => void
           >
             Forgot Password?
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const base = window.location.pathname + (window.location.hash || '');
+              window.location.href = base + (base.includes('?') ? '&' : '?') + 'clear_auth=1';
+            }}
+            className="w-full text-gray-500 text-xs mt-6 underline hover:text-gray-700"
+          >
+            Start fresh (clear cache & sign out)
+          </button>
         </form>
       </div>
     </div>
@@ -390,24 +420,115 @@ function MobileTeamRoster({
   const [success, setSuccess] = useState(false);
   const [athletes, setAthletes] = useState<RosterAthlete[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(true);
+  const [pendingInvites, setPendingInvites] = useState<Array<{ invitationId: string; athleteEmail: string; athleteName?: string; createdAt?: unknown }>>([]);
+
+  const fetchPendingInvites = useCallback(async () => {
+    if (!authUser?.id) return;
+    try {
+      const q = query(
+        collection(db, 'invitations'),
+        where('coachId', '==', authUser.id),
+        where('status', '==', 'pending')
+      );
+      const snap = await getDocs(q);
+      const invites = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          invitationId: d.id,
+          athleteEmail: (data.athleteEmail ?? '').trim().toLowerCase(),
+          athleteName: data.athleteName ?? null,
+          createdAt: data.createdAt,
+        };
+      });
+      // Check API/MongoDB: if athlete exists for this email, mark invite accepted and exclude
+      let athletesFromApi: Array<{ athlete_id?: string; athlete_name?: string; email?: string }> = [];
+      try {
+        const res = (await getAllAthletes({ limit: 200 })) as
+          | { athletes?: Array<{ athlete_id?: string; athlete_name?: string; email?: string }> }
+          | Array<{ athlete_id?: string; athlete_name?: string; email?: string }>;
+        const raw = Array.isArray((res as { athletes?: unknown[] })?.athletes)
+          ? (res as { athletes: Array<{ athlete_id?: string; athlete_name?: string; email?: string }> }).athletes
+          : Array.isArray(res)
+            ? (res as Array<{ athlete_id?: string; athlete_name?: string; email?: string }>)
+            : [];
+        athletesFromApi = raw;
+      } catch {
+        /* ignore */
+      }
+      const athleteEmails = new Set(
+        athletesFromApi.map((a) => ((a as { email?: string }).email ?? '').trim().toLowerCase()).filter(Boolean)
+      );
+      const stillPending: typeof invites = [];
+      for (const inv of invites) {
+        if (athleteEmails.has(inv.athleteEmail)) {
+          try {
+            await updateDoc(doc(db, 'invitations', inv.invitationId), {
+              status: 'accepted',
+              acceptedAt: serverTimestamp(),
+            });
+          } catch {
+            /* ignore - still filter from display */
+          }
+        } else {
+          stillPending.push(inv);
+        }
+      }
+      setPendingInvites(stillPending);
+    } catch {
+      setPendingInvites([]);
+    }
+  }, [authUser?.id]);
 
   const fetchRoster = useCallback(async () => {
     setLoadingRoster(true);
     try {
       const res = (await getAllAthletes({ limit: 100 })) as
-        | { athletes?: Array<{ athlete_id?: string; athlete_name?: string; status?: string }> }
-        | Array<{ athlete_id?: string; athlete_name?: string }>;
+        | { athletes?: Array<{ athlete_id?: string; athlete_name?: string; status?: string; email?: string }> }
+        | Array<{ athlete_id?: string; athlete_name?: string; email?: string }>;
       const raw = Array.isArray((res as { athletes?: unknown[] })?.athletes)
-        ? (res as { athletes: Array<{ athlete_id?: string; athlete_name?: string; status?: string }> }).athletes
+        ? (res as { athletes: Array<{ athlete_id?: string; athlete_name?: string; status?: string; email?: string }> }).athletes
         : Array.isArray(res)
-          ? (res as Array<{ athlete_id?: string; athlete_name?: string }>)
+          ? (res as Array<{ athlete_id?: string; athlete_name?: string; email?: string }>)
           : [];
+      const apiEmails = new Set(
+        raw.map((a) => ((a as { email?: string }).email ?? '').trim().toLowerCase()).filter(Boolean)
+      );
       const list = raw.map((a) => ({
         athlete_id: a.athlete_id ?? '',
         athlete_name: a.athlete_name ?? a.athlete_id ?? 'Unknown',
         status: (a as { status?: string }).status as 'alert' | 'monitor' | 'normal' | undefined,
         activity: (a as { activity?: string }).activity,
       }));
+
+      // Merge in athletes from Firestore (coach's linked roster) so newly joined invited athletes show up
+      if (authUser?.id) {
+        try {
+          const coachAthletesRef = collection(db, 'coaches', authUser.id, 'athletes');
+          const snap = await getDocs(coachAthletesRef);
+          for (const d of snap.docs) {
+            const data = d.data();
+            const email = (data.athleteEmail ?? '').trim().toLowerCase();
+            const name = data.athleteName || data.athleteEmail || d.id;
+            const fid = d.id; // Firebase UID
+            const backendAthleteId = (data.athleteId as string) || fid;
+            const alreadyInList = list.some(
+              (a) => a.athlete_id === fid || a.athlete_id === backendAthleteId || (email && apiEmails.has(email))
+            );
+            if (!alreadyInList) {
+              list.push({
+                athlete_id: backendAthleteId,
+                athlete_name: name,
+                status: 'normal' as const,
+                activity: undefined,
+              });
+              if (email) apiEmails.add(email);
+            }
+          }
+        } catch {
+          /* ignore Firestore merge errors */
+        }
+      }
+
       setAthletes(list);
       onRosterLoaded?.(list.map(({ athlete_id, athlete_name }) => ({ athlete_id, athlete_name })));
     } catch {
@@ -416,11 +537,15 @@ function MobileTeamRoster({
     } finally {
       setLoadingRoster(false);
     }
-  }, []);
+  }, [authUser?.id]);
 
   useEffect(() => {
     fetchRoster();
   }, [fetchRoster]);
+
+  useEffect(() => {
+    fetchPendingInvites();
+  }, [fetchPendingInvites]);
 
   const handleSendInvite = async () => {
     if (!athleteEmail) {
@@ -450,10 +575,29 @@ function MobileTeamRoster({
       const baseUrl = window.location.origin;
       const invitationLink = `${baseUrl}/?invite=${invitationToken}&mode=signup`;
 
+      const coachId = authUser.id;
+      const coachName = user.fullName || authUser.fullName || 'Coach';
+      const coachEmail = user.email || authUser.email || '';
+
+      // Save invitation to Firestore so athlete can be linked when they sign up (by email)
+      const emailTrimmed = athleteEmail.trim();
+      await addDoc(collection(db, 'invitations'), {
+        invitationToken,
+        athleteEmail: emailTrimmed,
+        athleteEmailLower: emailTrimmed.toLowerCase(),
+        athleteName: athleteName.trim() || null,
+        coachId,
+        coachName,
+        coachEmail,
+        institution: user.institution || null,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+      });
+
       // Send invitation via Brevo
       const result = await BrevoService.sendAthleteInvitation({
-        coachName: user.fullName || authUser.fullName || 'Coach',
-        coachEmail: user.email || authUser.email || '',
+        coachName,
+        coachEmail,
         athleteEmail: athleteEmail.trim(),
         athleteName: athleteName.trim() || undefined,
         institution: user.institution || undefined,
@@ -464,6 +608,8 @@ function MobileTeamRoster({
         setSuccess(true);
         setAthleteEmail('');
         setAthleteName('');
+        fetchPendingInvites(); // refresh pending invites list
+        fetchRoster(); // keep roster in sync (e.g. after an invite is accepted elsewhere)
         // Close modal after 2 seconds
         setTimeout(() => {
           setShowInviteModal(false);
@@ -472,7 +618,7 @@ function MobileTeamRoster({
       } else {
         setError(result.error || 'Failed to send invitation. Please try again.');
       }
-    } catch (err: any) {
+      } catch (err: any) {
       console.error('Error sending invitation:', err);
       setError(err.message || 'An error occurred. Please try again.');
     } finally {
@@ -535,11 +681,42 @@ function MobileTeamRoster({
       {/* Athlete Cards - from API */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="space-y-3">
+          {/* Pending invites - not yet accepted */}
+          {pendingInvites.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-sm font-medium text-gray-500 mb-2">Pending invites</h3>
+              <div className="space-y-2">
+                {pendingInvites.map((inv, i) => (
+                  <div
+                    key={inv.athleteEmail + String(i)}
+                    className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3"
+                  >
+                    <div>
+                      <p className="text-gray-900 font-medium text-sm">
+                        {inv.athleteName || inv.athleteEmail}
+                      </p>
+                      {inv.athleteName && (
+                        <p className="text-gray-500 text-xs">{inv.athleteEmail}</p>
+                      )}
+                    </div>
+                    <span className="text-amber-700 text-xs font-medium px-2 py-1 bg-amber-100 rounded-full">
+                      Invited
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {loadingRoster ? (
             <div className="py-8 text-center text-gray-500 text-sm">Loading roster...</div>
-          ) : athletes.length === 0 ? (
+          ) : athletes.length === 0 && pendingInvites.length === 0 ? (
             <div className="py-8 text-center text-gray-500 text-sm">
               No athletes in roster. Add athletes via the API or invite flow.
+            </div>
+          ) : athletes.length === 0 ? (
+            <div className="py-8 text-center text-gray-500 text-sm">
+              No athletes yet. Pending invites will appear above when accepted.
             </div>
           ) : (
             athletes.map((a) => {
@@ -652,8 +829,11 @@ function MobileTeamRoster({
                   <Check className="w-8 h-8 text-green-600" />
                 </div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Invitation Sent!</h3>
-                <p className="text-gray-600 text-sm">
+                <p className="text-gray-600 text-sm mb-2">
                   An invitation email has been sent to {athleteEmail}
+                </p>
+                <p className="text-gray-500 text-xs">
+                  Not in inbox? Check spam/junk and ensure the sender is verified in Brevo.
                 </p>
               </div>
             ) : (

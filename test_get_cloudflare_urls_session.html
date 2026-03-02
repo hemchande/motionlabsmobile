@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test: Get Cloudflare URLs for Session (API client style)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: #374151; }
+    label { display: block; margin-top: 0.75rem; font-weight: 500; }
+    input, select { width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    button { margin-top: 0.75rem; padding: 0.6rem 1.2rem; background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .out { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; white-space: pre-wrap; word-break: break-all; font-size: 0.875rem; max-height: 50vh; overflow-y: auto; }
+    .out.success { background: #dcfce7; color: #166534; }
+    .out.error { background: #fee2e2; color: #991b1b; }
+    .out.info { background: #e0e7ff; color: #3730a3; }
+    .hint { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; }
+    a { color: #2563eb; }
+    .url-list { margin: 0.5rem 0; padding-left: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Test: Get Cloudflare URLs for Session</h1>
+  <p>Uses the same endpoints as the app API client: <code>GET /api/session/:id</code> and <code>GET /api/athlete/:id/sessions</code>.</p>
+
+  <label>API base URL</label>
+  <input type="url" id="apiUrl" value="https://athlete-coach-fastapi-630016859450.europe-west1.run.app" placeholder="https://..." />
+  <p class="hint">No trailing slash. Use http://localhost:8004 for local.</p>
+
+  <h2>1. Get one session by ID</h2>
+  <form id="formSession">
+    <label>Session ID</label>
+    <input type="text" id="sessionId" placeholder="e.g. 507f1f77bcf86cd799439011" required />
+    <button type="submit" id="btnSession">Get session (Cloudflare URLs)</button>
+  </form>
+  <div id="outSession" class="out" style="display: none;"></div>
+
+  <h2>2. Get sessions for an athlete</h2>
+  <form id="formAthlete">
+    <label>Athlete ID</label>
+    <input type="text" id="athleteId" placeholder="e.g. athlete_001" required />
+    <label>Limit (optional)</label>
+    <input type="number" id="limit" value="10" min="1" max="100" />
+    <button type="submit" id="btnAthlete">Get athlete sessions</button>
+  </form>
+  <div id="outAthlete" class="out" style="display: none;"></div>
+
+  <script>
+    const base = () => document.getElementById('apiUrl').value.replace(/\/$/, '');
+
+    function showOut(id, html, isError) {
+      const el = document.getElementById(id);
+      el.style.display = 'block';
+      el.className = 'out ' + (isError ? 'error' : 'success');
+      el.innerHTML = html;
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function formatCloudflareUrls(data) {
+      const urls = [];
+      if (data.cloudflare_stream_url) urls.push({ label: 'cloudflare_stream_url', url: data.cloudflare_stream_url });
+      if (data.cloudflare_stream_urls && Array.isArray(data.cloudflare_stream_urls)) {
+        data.cloudflare_stream_urls.forEach((u, i) => {
+          const url = typeof u === 'string' ? u : (u && u.url);
+          if (url) urls.push({ label: 'cloudflare_stream_urls[' + i + ']', url });
+        });
+      }
+      if (urls.length === 0) return '';
+      return urls.map(u => `<div class="url-list"><strong>${escapeHtml(u.label)}:</strong> <a href="${escapeHtml(u.url)}" target="_blank" rel="noopener">${escapeHtml(u.url)}</a></div>`).join('');
+    }
+
+    // GET /api/session/:sessionId
+    document.getElementById('formSession').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const sessionId = document.getElementById('sessionId').value.trim();
+      const btn = document.getElementById('btnSession');
+      btn.disabled = true;
+      showOut('outSession', 'Loading...', false);
+      try {
+        const url = base() + '/api/session/' + encodeURIComponent(sessionId);
+        const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
+        const data = await res.json().catch(() => ({}));
+        const cfBlock = formatCloudflareUrls(data);
+        let html = '<strong>HTTP ' + res.status + '</strong><br><br>';
+        if (cfBlock) {
+          html += '<strong>Cloudflare URLs in this session:</strong><br>' + cfBlock + '<br>';
+        }
+        html += '<details><summary>Full JSON</summary><pre>' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre></details>';
+        showOut('outSession', html, !res.ok);
+      } catch (err) {
+        showOut('outSession', 'Error: ' + (err.message || String(err)) + '\n\nCheck CORS if calling from file:// or another origin.', true);
+      }
+      btn.disabled = false;
+    });
+
+    // GET /api/athlete/:athleteId/sessions
+    document.getElementById('formAthlete').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const athleteId = document.getElementById('athleteId').value.trim();
+      const limit = document.getElementById('limit').value;
+      const btn = document.getElementById('btnAthlete');
+      btn.disabled = true;
+      showOut('outAthlete', 'Loading...', false);
+      try {
+        const params = new URLSearchParams();
+        if (limit) params.set('limit', limit);
+        const qs = params.toString();
+        const url = base() + '/api/athlete/' + encodeURIComponent(athleteId) + '/sessions' + (qs ? '?' + qs : '');
+        const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
+        const data = await res.json().catch(() => ({}));
+        const sessions = Array.isArray(data) ? data : (data.sessions || data.items || []);
+        let html = '<strong>HTTP ' + res.status + '</strong> — ' + sessions.length + ' session(s)<br><br>';
+        sessions.forEach((s, i) => {
+          const cfBlock = formatCloudflareUrls(s);
+          html += '<strong>Session ' + (i + 1) + '</strong>';
+          if (s.session_id) html += ' id=' + escapeHtml(String(s.session_id).slice(0, 12)) + '…';
+          if (s._id) html += ' _id=' + escapeHtml(String(s._id).slice(0, 12)) + '…';
+          html += '<br>';
+          if (cfBlock) html += cfBlock + '<br>'; else html += '<span class="hint">No Cloudflare URLs</span><br>';
+        });
+        html += '<details><summary>Full JSON</summary><pre>' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre></details>';
+        showOut('outAthlete', html, !res.ok);
+      } catch (err) {
+        showOut('outAthlete', 'Error: ' + (err.message || String(err)) + '\n\nCheck CORS if calling from file:// or another origin.', true);
+      }
+      btn.disabled = false;
+    });
+  </script>
+</body>
+</html>

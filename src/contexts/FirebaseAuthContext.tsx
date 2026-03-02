@@ -25,7 +25,7 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../lib/firebase';
 import { getAthleteCoachApiUrl } from '../lib/athleteCoachApiUrl';
-import { createAthleteCoachClient } from '../services/athleteCoachFastApiClient';
+import { createAthleteCoachClient, type CreateUserResponse } from '../services/athleteCoachFastApiClient';
 
 interface User {
   id: string;
@@ -57,8 +57,10 @@ interface AuthContextType {
   firebaseUser: FirebaseUser | null;
   userRole: "coach" | "athlete";
   needsProfileCompletion: boolean;
+  needsPhotoCompletion: boolean;
   firebaseUserPendingProfile: FirebaseUser | null;
   completeProfile: (data: GoogleProfileCompletionData) => Promise<{ success: boolean; error?: string }>;
+  clearPhotoCompletion: () => void;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signup: (userData: SignupData) => Promise<{ success: boolean; error?: string; user?: User }>;
   logout: () => Promise<void>;
@@ -84,9 +86,12 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [firebaseUserPendingProfile, setFirebaseUserPendingProfile] = useState<FirebaseUser | null>(null);
   const [needsProfileCompletion, setNeedsProfileCompletion] = useState(false);
+  const [needsPhotoCompletion, setNeedsPhotoCompletion] = useState(false);
   const [userRole, setUserRole] = useState<"coach" | "athlete">("coach");
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
+
+  const clearPhotoCompletion = () => setNeedsPhotoCompletion(false);
 
   useEffect(() => {
     setMounted(true);
@@ -104,54 +109,103 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
             const userData = userDoc.data();
             console.log('User document found:', userData);
             
-            const userProfile: User = {
-              id: firebaseUser.uid,
-              email: firebaseUser.email!,
-              fullName: userData.fullName,
-              role: userData.role,
-              institution: userData.institution,
-              athleteCount: userData.athleteCount,
-              createdAt: userData.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
-              lastLogin: new Date().toISOString(),
-              profileImage: userData.profileImage,
-              emailVerified: firebaseUser.emailVerified
-            };
+            // TEMPORARY: Allow access if Firebase UID detected (skip photo requirement)
+            // TODO: Re-enable photo requirement later by checking athleteId
+            const hasBasicInfo = userData.role && userData.fullName;
             
-            console.log('Setting user profile and authenticating:', userProfile);
-            setUser(userProfile);
-            setUserRole(userProfile.role);
-            setIsAuthenticated(true);
-            setFirebaseUser(firebaseUser);
-            
-            // Update last login
-            await updateDoc(doc(db, 'users', firebaseUser.uid), {
-              lastLogin: serverTimestamp()
-            });
+            if (hasBasicInfo) {
+              // If user doc has role + fullName, always redirect to dashboard (existing user).
+              // Optionally correct role when their email is in invitations (coach → athlete).
+              const userEmailNorm = (firebaseUser.email || '').trim().toLowerCase();
+              let isInvitedAthlete = false;
+              if (userEmailNorm) {
+                try {
+                  const invitationsRef = collection(db, 'invitations');
+                  const qLower = query(invitationsRef, where('athleteEmailLower', '==', userEmailNorm));
+                  const qExact = query(invitationsRef, where('athleteEmail', '==', userEmailNorm));
+                  const rawEmail = (firebaseUser.email || '').trim();
+                  const qRaw = rawEmail && rawEmail !== userEmailNorm
+                    ? query(invitationsRef, where('athleteEmail', '==', rawEmail))
+                    : null;
+                  const [snapLower, snapExact, snapRaw] = await Promise.all([
+                    getDocs(qLower),
+                    getDocs(qExact),
+                    qRaw ? getDocs(qRaw) : Promise.resolve(null)
+                  ]);
+                  const rawMatches = snapRaw && 'empty' in snapRaw && !(snapRaw as { empty: boolean }).empty;
+                  isInvitedAthlete = !snapLower.empty || !snapExact.empty || !!rawMatches;
+                } catch (inviteCheckErr) {
+                  console.warn('Invited-athlete check failed:', inviteCheckErr);
+                }
+              }
+
+              // Profile complete - authenticate and redirect to dashboard
+              console.log(`✅ User has profile (role + fullName), granting access`);
+              let effectiveRole = userData.role as 'coach' | 'athlete';
+              if (effectiveRole === 'coach' && isInvitedAthlete) {
+                console.log('✅ Invited athlete detected (email in invitations) – correcting role to athlete');
+                await updateDoc(doc(db, 'users', firebaseUser.uid), { role: 'athlete' });
+                effectiveRole = 'athlete';
+              }
+              
+              const userProfile: User = {
+                id: firebaseUser.uid,
+                email: firebaseUser.email!,
+                fullName: userData.fullName,
+                role: effectiveRole,
+                institution: userData.institution,
+                athleteCount: userData.athleteCount,
+                athleteId: userData.athleteId,
+                createdAt: userData.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
+                lastLogin: new Date().toISOString(),
+                profileImage: userData.profileImage,
+                emailVerified: firebaseUser.emailVerified
+              };
+              
+              console.log('Setting user profile and authenticating:', userProfile);
+              setUser(userProfile);
+              setUserRole(userProfile.role);
+              setNeedsProfileCompletion(false);
+              setFirebaseUserPendingProfile(null);
+              setIsAuthenticated(true);
+              setFirebaseUser(firebaseUser);
+              
+              // Update last login
+              await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                lastLogin: serverTimestamp()
+              });
+              setLoading(false);
+            } else {
+              // Profile incomplete - need basic info (e.g. invited athlete who just signed in)
+              console.log(`⚠️ Incomplete profile (missing basic info), showing profile completion`);
+              setFirebaseUserPendingProfile(firebaseUser);
+              setNeedsProfileCompletion(true);
+              setUser(null);
+              setFirebaseUser(firebaseUser);
+              setIsAuthenticated(false);
+              setLoading(false);
+            }
           } else {
+            // No user doc in Firestore (e.g. new Google sign-up or invited athlete first sign-in)
             console.log('User document not found - needs profile completion (Google sign-up)');
             setFirebaseUserPendingProfile(firebaseUser);
             setNeedsProfileCompletion(true);
             setUser(null);
             setFirebaseUser(firebaseUser);
             setIsAuthenticated(false);
+            setLoading(false);
           }
         } catch (error: unknown) {
           const err = error as { code?: string; message?: string };
-          const isPermissionError = err?.code === 'permission-denied' || 
-            (typeof err?.message === 'string' && err.message.includes('permission'));
-          // For new Google sign-ups, the user doc may not exist; some Firestore rules
-          // return permission-denied when reading a non-existent doc. Treat as profile completion.
-          if (isPermissionError) {
-            console.log('User doc not readable (likely new Google sign-up) - showing profile completion');
-            setFirebaseUserPendingProfile(firebaseUser);
-            setNeedsProfileCompletion(true);
-            setUser(null);
-            setFirebaseUser(firebaseUser);
-            setIsAuthenticated(false);
-          } else {
-            console.error('Error fetching user profile:', error);
-            await signOut(auth);
-          }
+          // On any error reading user doc (permission, network, missing), show profile completion
+          // so invited athletes and new sign-ups can complete profile instead of being signed out.
+          console.warn('Error fetching user profile – showing profile completion:', err?.message || error);
+          setFirebaseUserPendingProfile(firebaseUser);
+          setNeedsProfileCompletion(true);
+          setUser(null);
+          setFirebaseUser(firebaseUser);
+          setIsAuthenticated(false);
+          setLoading(false);
         }
       } else {
         console.log('No user, setting unauthenticated state');
@@ -161,6 +215,12 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
         setNeedsProfileCompletion(false);
         setUserRole("coach");
         setIsAuthenticated(false);
+        try {
+          localStorage.removeItem('userEmail');
+          localStorage.removeItem('userId');
+          localStorage.removeItem('userName');
+          localStorage.removeItem('mcpUser');
+        } catch (_) {}
       }
       setLoading(false);
     });
@@ -168,35 +228,85 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  // When athlete has athlete_id, check if profile has photo (GET details → 403 means add photo required)
+  useEffect(() => {
+    if (!user || user.role !== 'athlete' || !user.athleteId) {
+      setNeedsPhotoCompletion(false);
+      return;
+    }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const client = createAthleteCoachClient(getAthleteCoachApiUrl());
+        await client.getAthleteDetails(user.athleteId!);
+        if (!cancelled) setNeedsPhotoCompletion(false);
+      } catch (e: unknown) {
+        const err = e as { status?: number; data?: { profile_complete?: boolean } };
+        if (!cancelled && err?.status === 403 && err?.data?.profile_complete === false) {
+          // Backend indicates athlete has no photo yet.
+          // Unify photo upload into the full profile completion screen (GoogleProfileCompletion).
+          setNeedsPhotoCompletion(false);
+          if (firebaseUser) setFirebaseUserPendingProfile(firebaseUser);
+          setNeedsProfileCompletion(true);
+        } else if (!cancelled) {
+          setNeedsPhotoCompletion(false);
+        }
+      }
+    };
+    check();
+    return () => { cancelled = true; };
+  }, [user?.id, user?.role, user?.athleteId, firebaseUser]);
+
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setLoading(true);
     
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const uid = userCredential.user.uid;
+      // Backend login: get athlete_id (and token) so Firestore has it for profile/details/add-photo (ATHLETE_COACH_BACKEND_REQUIREMENTS.md)
+      try {
+        const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
+        const loginRes = await apiClient.login({ email, password, role: 'athlete' });
+        const athleteId = loginRes.user?.athlete_id;
+        if (athleteId) {
+          await setDoc(doc(db, 'users', uid), { athleteId, lastLogin: serverTimestamp() }, { merge: true });
+        }
+      } catch (apiErr) {
+        console.warn('Backend login (athlete_id sync) failed, continuing with Firebase auth:', apiErr);
+      }
       // Don't set loading to false here - let the auth state change handler manage it
       return { success: true };
     } catch (error: any) {
-      console.error('Login error:', error);
+      const code = error?.code ?? error?.data?.error?.message ?? '';
+      console.error('Login error:', { code, message: error?.message, full: error });
       let errorMessage = "Login failed. Please try again.";
-      
-      switch (error.code) {
-        case 'auth/user-not-found':
-          errorMessage = "No account found with this email address.";
-          break;
-        case 'auth/wrong-password':
-          errorMessage = "Incorrect password.";
-          break;
-        case 'auth/invalid-email':
-          errorMessage = "Invalid email address.";
-          break;
-        case 'auth/user-disabled':
-          errorMessage = "This account has been disabled.";
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = "Too many failed attempts. Please try again later.";
-          break;
+      const backendMsg = error?.data?.error?.message;
+
+      if (backendMsg === 'INVALID_LOGIN_CREDENTIALS' || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
+        errorMessage = "Incorrect email or password. If you signed up with Google, use Sign in with Google instead.";
+      } else {
+        switch (error.code) {
+          case 'auth/user-not-found':
+            errorMessage = "No account found with this email address. Use Sign in with Google if you created the account with Google.";
+            break;
+          case 'auth/invalid-email':
+            errorMessage = "Invalid email address.";
+            break;
+          case 'auth/user-disabled':
+            errorMessage = "This account has been disabled.";
+            break;
+          case 'auth/too-many-requests':
+            errorMessage = "Too many failed attempts. Please try again later.";
+            break;
+          case 'auth/operation-not-allowed':
+            errorMessage = "Email/password sign-in is not enabled. Use Sign in with Google or contact support.";
+            break;
+          default:
+            errorMessage = error?.message || errorMessage;
+            break;
+        }
       }
-      
+
       setLoading(false);
       return { success: false, error: errorMessage };
     }
@@ -208,32 +318,112 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
 
     setLoading(true);
     try {
-      let profileImageUrl: string | null = null;
-      if (data.photoFile) {
-        const storageRef = ref(storage, `users/${fbUser.uid}/profile.jpg`);
-        await uploadBytes(storageRef, data.photoFile);
-        profileImageUrl = await getDownloadURL(storageRef);
+      // Single source of truth for profile photo:
+      // - Photo is uploaded ONLY via FastAPI `/api/athlete/add-photo-upload` from this profile completion flow.
+      // - We do not upload to Firebase Storage here to avoid CORS issues + duplicate photo flows.
+      if (data.role === 'athlete' && !data.photoFile) {
+        return { success: false, error: 'Please upload a profile photo to continue.' };
       }
 
       const fullName = fbUser.displayName || fbUser.email?.split('@')[0] || 'User';
       const email = fbUser.email || '';
 
-      // Create user via FastAPI (generates athlete_id for athletes) - use random password for Google-only users
+      // Create or update user via FastAPI (generates athlete_id for athletes)
       let apiUserData: { user?: { athlete_id?: string; id?: string } } | null = null;
       const googlePlaceholderPassword = `${crypto.randomUUID()}${crypto.randomUUID()}`;
       try {
         const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
-        const apiResult = (await apiClient.createUser({
+        
+        // Try to create user
+        const apiResult = await apiClient.createUser({
           email,
           password: googlePlaceholderPassword,
           full_name: fullName,
           role: data.role,
           institution: data.institution,
           firebase_uid: fbUser.uid,
-        })) as { status?: string; user?: { athlete_id?: string; id?: string } };
+        }) as CreateUserResponse;
+        
         if (apiResult?.status === 'success' && apiResult?.user) {
           apiUserData = { user: apiResult.user };
           console.log('✅ User created via FastAPI with athlete_id:', apiUserData?.user?.athlete_id);
+        } else if (apiResult?.status === 'error' && apiResult?.message?.includes('already exists')) {
+          // User already exists in backend - this is OK!
+          console.log('✅ User already exists in backend, using existing data');
+          
+          // Get existing data from Firestore
+          try {
+            const existingDoc = await getDoc(doc(db, 'users', fbUser.uid));
+            if (existingDoc.exists()) {
+              const existingData = existingDoc.data();
+              console.log('✅ Found existing Firestore data:', existingData);
+              
+              // Use existing athlete_id
+              if (existingData.athleteId) {
+                apiUserData = { user: { athlete_id: existingData.athleteId, id: existingData.mcpUserId } };
+                console.log('✅ Using existing athlete_id:', existingData.athleteId);
+              }
+              
+              // Update profile with new data (if user changed anything)
+              await updateDoc(doc(db, 'users', fbUser.uid), {
+                fullName: data.role === 'athlete' ? fullName : existingData.fullName,
+                role: data.role,
+                institution: data.institution || existingData.institution,
+                ...(data.role === 'athlete' && {
+                  age: data.age,
+                  weight: data.weight,
+                  height: data.height,
+                  pastInjuries: data.pastInjuries,
+                }),
+                lastLogin: serverTimestamp(),
+              });
+
+              // Upload photo to backend from the full profile completion screen (single place).
+              const existingAthleteId = existingData.athleteId as string | undefined;
+              if (data.role === 'athlete' && existingAthleteId && data.photoFile) {
+                try {
+                  const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
+                  await apiClient.addPhotoUpload({
+                    athlete_id: existingAthleteId,
+                    photo: data.photoFile,
+                    athlete_name: fullName,
+                  });
+                  console.log('✅ Profile photo uploaded to backend (add-photo-upload)');
+                } catch (photoError) {
+                  console.warn('⚠️ Failed to upload profile photo to backend:', photoError);
+                }
+              }
+              
+              // Set auth state for immediate redirect
+              setUser({
+                id: fbUser.uid,
+                email: existingData.email || email,
+                fullName: existingData.fullName || fullName,
+                role: data.role as "coach" | "athlete",
+                institution: data.institution || existingData.institution,
+                athleteCount: existingData.athleteCount,
+                athleteId: existingData.athleteId,
+                createdAt: existingData.createdAt?.toDate?.()?.toISOString?.() || new Date().toISOString(),
+                lastLogin: new Date().toISOString(),
+                profileImage: existingData.profileImage,
+                emailVerified: fbUser.emailVerified,
+              });
+              setUserRole(data.role as "coach" | "athlete");
+              setNeedsProfileCompletion(false);
+              setFirebaseUser(fbUser);
+              setFirebaseUserPendingProfile(null);
+              setIsAuthenticated(true);
+              setLoading(false);
+              
+              console.log('✅ Existing user profile updated, redirecting to dashboard');
+              
+              // Return success - triggers redirect to dashboard
+              return { success: true };
+            }
+          } catch (firestoreErr) {
+            console.warn('⚠️ Could not fetch/update existing Firestore data:', firestoreErr);
+            // Fall through to normal profile completion
+          }
         }
       } catch (apiError) {
         console.warn('⚠️ FastAPI create-user failed (continuing with profile completion):', apiError);
@@ -247,7 +437,6 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
         role: data.role,
         createdAt: serverTimestamp(),
         lastLogin: serverTimestamp(),
-        profileImage: profileImageUrl,
         emailVerified: fbUser.emailVerified,
         ...(data.institution && { institution: data.institution }),
         ...(athleteId && { athleteId }),
@@ -262,18 +451,18 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
 
       await setDoc(doc(db, 'users', fbUser.uid), userDoc);
 
-      // Register profile photo with backend if athlete and we have athlete_id + photo URL
-      if (athleteId && profileImageUrl) {
+      // Upload profile photo to backend (this is the ONLY photo upload path we keep).
+      if (data.role === 'athlete' && athleteId && data.photoFile) {
         try {
           const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
-          await apiClient.addUserPhoto({
+          await apiClient.addPhotoUpload({
             athlete_id: athleteId,
-            photo_url: profileImageUrl,
+            photo: data.photoFile,
             athlete_name: fullName,
           });
-          console.log('✅ Profile photo registered with backend');
+          console.log('✅ Profile photo uploaded to backend (add-photo-upload)');
         } catch (photoError) {
-          console.warn('⚠️ Failed to register profile photo with backend:', photoError);
+          console.warn('⚠️ Failed to upload profile photo to backend:', photoError);
         }
       }
 
@@ -281,18 +470,25 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
       if (data.role === 'athlete') {
         try {
           const invitationsRef = collection(db, 'invitations');
-          const q = query(
+          const emailLower = email.trim().toLowerCase();
+          const qLower = query(
             invitationsRef,
-            where('athleteEmail', '==', email),
+            where('athleteEmailLower', '==', emailLower),
             where('status', '==', 'pending')
           );
-          const querySnapshot = await getDocs(q);
+          const qExact = query(
+            invitationsRef,
+            where('athleteEmail', '==', email.trim()),
+            where('status', '==', 'pending')
+          );
+          const [snapLower, snapExact] = await Promise.all([getDocs(qLower), getDocs(qExact)]);
+          const querySnapshot = snapLower.empty ? snapExact : snapLower;
           for (const invitationDoc of querySnapshot.docs) {
             const invitation = invitationDoc.data();
             await setDoc(
               doc(db, 'coaches', invitation.coachId, 'athletes', fbUser.uid),
               {
-                athleteId: fbUser.uid,
+                athleteId: athleteId || fbUser.uid,
                 athleteEmail: email,
                 athleteName: fullName,
                 joinedAt: serverTimestamp(),
@@ -323,7 +519,7 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
         athleteId,
         createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
-        profileImage: profileImageUrl ?? undefined,
+        profileImage: undefined,
         emailVerified: fbUser.emailVerified,
       };
 
@@ -357,14 +553,14 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
       let apiUserData: { user?: { athlete_id?: string; id?: string } } | null = null;
       try {
         const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
-        const apiResult = (await apiClient.createUser({
+        const apiResult = await apiClient.createUser({
           email: userData.email,
           password: userData.password,
           full_name: userData.fullName,
           role: userData.role,
           institution: userData.institution,
           firebase_uid: firebaseUser.uid,
-        })) as { status?: string; user?: { athlete_id?: string; id?: string } };
+        }) as CreateUserResponse;
         if (apiResult?.status === 'success' && apiResult?.user) {
           apiUserData = { user: apiResult.user };
           console.log('✅ User created via FastAPI with athlete_id:', apiUserData?.user?.athlete_id);
@@ -393,23 +589,30 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
       // Check for pending invitations and auto-accept them
       if (userData.role === 'athlete') {
         try {
-          // Find pending invitations for this email
           const invitationsRef = collection(db, 'invitations');
-          const q = query(
-            invitationsRef, 
-            where('athleteEmail', '==', userData.email),
+          const emailLower = (userData.email || '').trim().toLowerCase();
+          const qLower = query(
+            invitationsRef,
+            where('athleteEmailLower', '==', emailLower),
             where('status', '==', 'pending')
           );
-          const querySnapshot = await getDocs(q);
+          const qExact = query(
+            invitationsRef,
+            where('athleteEmail', '==', (userData.email || '').trim()),
+            where('status', '==', 'pending')
+          );
+          const [snapLower, snapExact] = await Promise.all([getDocs(qLower), getDocs(qExact)]);
+          const querySnapshot = snapLower.empty ? snapExact : snapLower;
           
           for (const invitationDoc of querySnapshot.docs) {
             const invitation = invitationDoc.data();
             
-            // Add athlete to coach's roster
+            // Add athlete to coach's roster (use backend athlete_id when available so API/embeddings work)
+            const backendAthleteId = apiUserData?.user?.athlete_id;
             await setDoc(
               doc(db, 'coaches', invitation.coachId, 'athletes', firebaseUser.uid),
               {
-                athleteId: firebaseUser.uid,
+                athleteId: backendAthleteId || firebaseUser.uid,
                 athleteEmail: userData.email,
                 athleteName: userData.fullName,
                 joinedAt: serverTimestamp(),
@@ -474,9 +677,34 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async (): Promise<void> => {
     try {
+      // Clear auth state immediately so UI shows logged-out and next login isn't confused with previous user
+      setUser(null);
+      setFirebaseUser(null);
+      setFirebaseUserPendingProfile(null);
+      setNeedsProfileCompletion(false);
+      setNeedsPhotoCompletion(false);
+      setUserRole('coach');
+      setIsAuthenticated(false);
+      // Clear localStorage so no stale user data remains after logout
+      try {
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userId');
+        localStorage.removeItem('userName');
+        localStorage.removeItem('mcpUser');
+      } catch (e) {
+        // ignore if localStorage unavailable
+      }
       await signOut(auth);
     } catch (error) {
       console.error('Logout error:', error);
+      // Still clear state so user can try logging in as someone else
+      setUser(null);
+      setFirebaseUser(null);
+      setFirebaseUserPendingProfile(null);
+      setNeedsProfileCompletion(false);
+      setNeedsPhotoCompletion(false);
+      setUserRole('coach');
+      setIsAuthenticated(false);
     }
   };
 
@@ -524,8 +752,10 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
       user, 
       firebaseUser,
       needsProfileCompletion,
+      needsPhotoCompletion,
       firebaseUserPendingProfile,
       completeProfile,
+      clearPhotoCompletion,
       userRole, 
       login, 
       signup, 

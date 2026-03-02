@@ -9,6 +9,7 @@ interface ImportMetaEnv {
   readonly VITE_MCP_SERVICE_URL?: string;
   readonly VITE_BREVO_API_KEY?: string;
   readonly VITE_ATHLETE_COACH_API_URL?: string;
+  readonly VITE_LIVE_CAMERA_WS_URL?: string;
 }
 
 interface ImportMeta {

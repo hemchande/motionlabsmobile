@@ -3,6 +3,10 @@
       "version": "0.1.0",
       "private": true,
       "dependencies": {
+            "@capacitor/android": "^8.1.0",
+            "@capacitor/cli": "^8.1.0",
+            "@capacitor/core": "^8.1.0",
+            "@capacitor/ios": "^8.1.0",
             "@cloudflare/stream-react": "^1.9.3",
             "@radix-ui/react-accordion": "^1.2.3",
             "@radix-ui/react-alert-dialog": "^1.1.6",
@@ -53,12 +57,18 @@
       "devDependencies": {
             "@types/node": "^20.10.0",
             "@vitejs/plugin-react-swc": "^3.10.2",
+            "firebase-admin": "^13.0.0",
             "vite": "6.3.5",
             "vite-plugin-pwa": "^1.2.0"
       },
-      "scripts": {
-            "dev": "vite",
-            "build": "vite build",
-            "phone-url": "node scripts/phone-url.js"
-      }
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "list-users": "node scripts/list-firebase-users.js",
+    "phone-url": "node scripts/phone-url.js",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:ios": "npm run cap:sync && npx cap open ios",
+    "cap:android": "npm run cap:sync && npx cap open android",
+    "cap:update": "npm run build && npx cap copy && npx cap update"
+  }
 }

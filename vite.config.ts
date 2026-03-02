@@ -2,6 +2,7 @@
   import react from '@vitejs/plugin-react-swc';
   import { VitePWA } from 'vite-plugin-pwa';
   import path from 'path';
+  import fs from 'fs';
 
   export default defineConfig({
     plugins: [
@@ -81,14 +82,19 @@
       target: 'esnext',
       outDir: 'build',
     },
-    server: {
-      port: 3000,
-      host: '0.0.0.0', // listen on all interfaces so phone on same Wi-Fi can connect
-      open: true,
-      strictPort: false,
-      headers: {
-        // Allow Google OAuth popup to call window.close() after sign-in
-        'Cross-Origin-Opener-Policy': 'same-origin-unsafe-allow-popups',
-      },
+  server: {
+    port: 3000,
+    host: '0.0.0.0', // listen on all interfaces so phone on same Wi-Fi can connect
+    open: true,
+    strictPort: false,
+    // HTTPS enabled
+    https: {
+      key: fs.readFileSync(path.resolve(__dirname, '.cert/key.pem')),
+      cert: fs.readFileSync(path.resolve(__dirname, '.cert/cert.pem')),
     },
+    headers: {
+      // Allow Google OAuth popup to call window.close() after sign-in
+      'Cross-Origin-Opener-Policy': 'same-origin-unsafe-allow-popups',
+    },
+  },
   });

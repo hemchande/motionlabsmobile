@@ -11,12 +11,20 @@ New-Project/
 build/
 dist/
 
+# Firebase service account (debug script only – do not commit)
+firebase-service-account.json
+
 # Environment (do not commit secrets)
 .env
+.env.*
+!.env.example
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# SSL certificates
+.cert/
 .env*.local
 
 # Logs and debug
@@ -45,3 +53,8 @@ venv/
 mcpEnv/
 videoEnv/
 *.egg-info/
+
+# Capacitor (native platforms)
+ios/
+android/
+.capacitor/

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloudflare Stream – HLS video test</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    .url { font-size: 0.75rem; color: #6b7280; word-break: break-all; margin-bottom: 1rem; }
+    .video-wrap { position: relative; width: 100%; background: #000; border-radius: 8px; overflow: hidden; }
+    .video-wrap video { width: 100%; height: auto; display: block; vertical-align: top; }
+    .video-wrap .err { padding: 2rem; color: #dc2626; text-align: center; }
+    .hint { font-size: 0.75rem; color: #6b7280; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Cloudflare Stream – HLS video</h1>
+  <p class="url">Manifest: <code id="manifestUrl">https://customer-cxebs7nmdazhytrk.cloudflarestream.com/31dddce425df8672b8bf4951ba374613/manifest/video.m3u8</code></p>
+  <div class="video-wrap">
+    <video id="video" controls playsinline></video>
+    <div id="err" class="err" style="display: none;"></div>
+  </div>
+  <p class="hint">Uses hls.js for HLS playback (Safari may use native HLS). If you see an error, check CORS and that the stream is public.</p>
+
+  <script>
+    const manifestUrl = 'https://customer-cxebs7nmdazhytrk.cloudflarestream.com/31dddce425df8672b8bf4951ba374613/manifest/video.m3u8';
+    const video = document.getElementById('video');
+    const errEl = document.getElementById('err');
+
+    function showErr(msg) {
+      errEl.textContent = msg;
+      errEl.style.display = 'block';
+    }
+
+    if (video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('application/x-mpegURL')) {
+      // Safari and some browsers support HLS natively
+      video.src = manifestUrl;
+      video.addEventListener('error', function () {
+        showErr('Video failed to load. Try opening in Safari or ensure the stream URL is valid.');
+      });
+    } else if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(manifestUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, function () {
+        errEl.style.display = 'none';
+      });
+      hls.on(Hls.Events.ERROR, function (_, data) {
+        if (data.fatal) {
+          showErr('HLS error: ' + (data.type || 'unknown') + '. Check CORS and stream availability.');
+        }
+      });
+    } else {
+      showErr('HLS not supported in this browser. Try Safari or use a browser with hls.js.');
+    }
+  </script>
+</body>
+</html>

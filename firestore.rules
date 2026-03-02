@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Users collection - users can read and write their own document
+    match /users/{userId} {
+      // Allow read if authenticated and it's their own document
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow write (create/update) if authenticated and it's their own document
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Sessions collection - allow read for authenticated users
+    match /sessions/{sessionId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Athletes collection - allow read/write for authenticated users
+    match /athletes/{athleteId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Coaches collection - allow read/write for authenticated users
+    match /coaches/{coachId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+      // Athletes subcollection - coach adds via invite; athlete adds self when accepting
+      match /athletes/{athleteId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+    
+    // Invitations - coach creates when sending invite; athlete/context reads and updates when accepting
+    match /invitations/{invitationId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Default: deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

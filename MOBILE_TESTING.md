@@ -65,6 +65,15 @@ When you open the app on your phone, it now calls the API at **the same host as 
 
 You don’t need to set `VITE_ATHLETE_COACH_API_URL` for local phone testing; the app uses your computer’s IP and port 8004 automatically.
 
+## 5c. Live Camera WebSocket (port 8010)
+
+The **WebSocket Feed Test** card connects to **`ws://136.115.36.127:8010/api/live-camera/ws`** by default. To change this:
+
+- Set `VITE_LIVE_CAMERA_WS_URL` in `.env` (e.g. `ws://YOUR_SERVER:8010/api/live-camera/ws`)
+- Or pass `wsUrl` prop to the `LiveCameraWSFeed` component
+
+The WebSocket server must be running and reachable from your phone/browser for the WebSocket feed to work.
+
 ## 6. Still not loading?
 
 - Restart the dev server: stop it (Ctrl+C), run `npm run dev` again, then run `npm run phone-url` and use the new URL.

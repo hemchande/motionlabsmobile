@@ -57,11 +57,17 @@ export class BrevoService {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const text = await response.text();
+        let errorData: unknown;
+        try {
+          errorData = text ? JSON.parse(text) : {};
+        } catch {
+          errorData = { message: text };
+        }
         throw new Error(`Brevo API error: ${response.status} - ${JSON.stringify(errorData)}`);
       }
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       
       return {
         success: true,

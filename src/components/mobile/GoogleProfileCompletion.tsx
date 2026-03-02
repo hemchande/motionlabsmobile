@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, Dumbbell, Camera, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/FirebaseAuthContext';
 import type { GoogleProfileCompletionData } from '../../contexts/FirebaseAuthContext';
@@ -7,9 +7,21 @@ interface GoogleProfileCompletionProps {
   onComplete?: (role: 'coach' | 'athlete') => void;
 }
 
+/** True when user landed via invite link (invited athlete flow) – role must stay athlete */
+function isInvitedAthleteFlow(): boolean {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('invite') != null && params.get('mode') === 'signup';
+}
+
 export function GoogleProfileCompletion({ onComplete }: GoogleProfileCompletionProps) {
-  const { firebaseUserPendingProfile, completeProfile, loading } = useAuth();
-  const [role, setRole] = useState<'coach' | 'athlete'>('athlete');
+  const { firebaseUserPendingProfile, completeProfile, loading, user } = useAuth();
+  const invitedAthlete = isInvitedAthleteFlow();
+  const lockToAthlete = invitedAthlete || user?.role === 'athlete';
+  const [role, setRole] = useState<'coach' | 'athlete'>(() => (lockToAthlete ? 'athlete' : 'athlete'));
+  useEffect(() => {
+    if (lockToAthlete) setRole('athlete');
+  }, [lockToAthlete]);
   const [institution, setInstitution] = useState('');
   const [age, setAge] = useState('');
   const [weight, setWeight] = useState('');
@@ -45,10 +57,11 @@ export function GoogleProfileCompletion({ onComplete }: GoogleProfileCompletionP
       return;
     }
 
+    const effectiveRole = invitedAthlete ? 'athlete' : role;
     const data: GoogleProfileCompletionData = {
-      role,
-      ...(role === 'coach' && institution && { institution }),
-      ...(role === 'athlete' && {
+      role: effectiveRole,
+      ...(effectiveRole === 'coach' && institution && { institution }),
+      ...(effectiveRole === 'athlete' && {
         age: age ? parseInt(age, 10) : undefined,
         weight: weight ? parseFloat(weight) : undefined,
         height: height || undefined,
@@ -61,7 +74,7 @@ export function GoogleProfileCompletion({ onComplete }: GoogleProfileCompletionP
     setSubmitting(false);
 
     if (result.success) {
-      onComplete?.(role);
+      onComplete?.(effectiveRole);
     } else {
       setError(result.error || 'Failed to save profile');
     }
@@ -81,35 +94,39 @@ export function GoogleProfileCompletion({ onComplete }: GoogleProfileCompletionP
       </div>
 
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col gap-4">
-        {/* Role Selection */}
+        {/* Role Selection – locked to athlete when coming from invite link */}
         <div>
           <label className="block text-gray-700 text-sm font-medium mb-2">I am a</label>
           <div className="flex gap-3">
             <button
               type="button"
-              onClick={() => setRole('athlete')}
+              onClick={() => !lockToAthlete && setRole('athlete')}
               className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 transition-colors ${
                 role === 'athlete'
                   ? 'border-blue-600 bg-blue-50 text-blue-700'
                   : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
-              }`}
+              } ${lockToAthlete ? 'cursor-default' : ''}`}
             >
               <Dumbbell className="w-5 h-5" />
               <span className="font-medium">Athlete</span>
             </button>
             <button
               type="button"
-              onClick={() => setRole('coach')}
+              onClick={() => !lockToAthlete && setRole('coach')}
+              disabled={lockToAthlete}
               className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 transition-colors ${
                 role === 'coach'
                   ? 'border-blue-600 bg-blue-50 text-blue-700'
                   : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
-              }`}
+              } ${lockToAthlete ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <User className="w-5 h-5" />
               <span className="font-medium">Coach</span>
             </button>
           </div>
+          {lockToAthlete && (
+            <p className="mt-2 text-sm text-green-700">You were invited as an athlete – complete your profile below.</p>
+          )}
         </div>
 
         {/* Coach: Institution */}

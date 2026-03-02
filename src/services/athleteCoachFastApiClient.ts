@@ -2,6 +2,7 @@
  * Athlete Coach FastAPI Client — frontend client for the FastAPI Athlete Coach server.
  *
  * Uses REST endpoints only (no MCP/session). Point at the FastAPI server, e.g. http://localhost:8004.
+ * Contract aligned with ATHLETE_COACH_BACKEND_REQUIREMENTS.md.
  *
  * Usage:
  *   import { createAthleteCoachClient } from './athleteCoachFastApiClient';
@@ -11,6 +12,30 @@
  */
 
 const DEFAULT_TIMEOUT_MS = 60000;
+
+/** Backend user object returned by create-user and login (see ATHLETE_COACH_BACKEND_REQUIREMENTS.md) */
+export interface AthleteCoachApiUser {
+  id?: string;
+  athlete_id?: string;
+  email?: string;
+  fullName?: string;
+  role?: string;
+}
+
+/** POST /api/create-user success response – backend must return user.athlete_id for athletes */
+export interface CreateUserResponse {
+  status: string;
+  user?: AthleteCoachApiUser;
+  message?: string;
+}
+
+/** POST /api/login success response – backend must return user.athlete_id for athletes */
+export interface LoginResponse {
+  status: string;
+  message?: string;
+  user?: AthleteCoachApiUser;
+  token?: string;
+}
 
 type RequestOptions = {
   method?: string;
@@ -48,9 +73,16 @@ async function request(
     }
   }
 
+  // Network debug: confirm in Safari Web Inspector → Network whether the request is sent
+  if (typeof window !== 'undefined' && (window as unknown as { __CAPACITOR_NETWORK_DEBUG?: boolean }).__CAPACITOR_NETWORK_DEBUG) {
+    console.log('[AthleteCoachAPI] fetch START', method, url);
+  }
   try {
     const response = await fetch(url, init);
     clearTimeout(id);
+    if (typeof window !== 'undefined' && (window as unknown as { __CAPACITOR_NETWORK_DEBUG?: boolean }).__CAPACITOR_NETWORK_DEBUG) {
+      console.log('[AthleteCoachAPI] fetch DONE', method, url, response.status);
+    }
     const text = await response.text();
     if (!response.ok) {
       let errData: Record<string, unknown>;
@@ -75,6 +107,9 @@ async function request(
     }
   } catch (e) {
     clearTimeout(id);
+    if (typeof window !== 'undefined') {
+      console.warn('[AthleteCoachAPI] fetch FAILED', method, url, e);
+    }
     throw e;
   }
 }
@@ -116,7 +151,8 @@ export class AthleteCoachFastApiClient {
     return request(this.baseUrl, path, { method: 'POST', body: body as object, ...this.options });
   }
 
-  // ——— Auth ———
+  // ——— Auth (contract: ATHLETE_COACH_BACKEND_REQUIREMENTS.md) ———
+  /** Create user; backend returns user.athlete_id for athletes – store and use for roster/details/embeddings. */
   async createUser(params: {
     email: string;
     password: string;
@@ -124,7 +160,7 @@ export class AthleteCoachFastApiClient {
     role?: string;
     institution?: string;
     firebase_uid?: string;
-  }) {
+  }): Promise<CreateUserResponse> {
     return this._post('/api/create-user', {
       email: params.email,
       password: params.password,
@@ -132,15 +168,16 @@ export class AthleteCoachFastApiClient {
       role: params.role ?? 'athlete',
       institution: params.institution,
       firebase_uid: params.firebase_uid,
-    });
+    }) as unknown as Promise<CreateUserResponse>;
   }
 
-  async login(params: { email: string; password: string; role?: string }) {
+  /** Login; backend returns user.athlete_id for athletes – persist to Firestore so profile/details/add-photo work. */
+  async login(params: { email: string; password: string; role?: string }): Promise<LoginResponse> {
     return this._post('/api/login', {
       email: params.email,
       password: params.password,
       role: params.role ?? 'athlete',
-    });
+    }) as unknown as Promise<LoginResponse>;
   }
 
   // ——— Athletes ———
@@ -213,6 +250,19 @@ export class AthleteCoachFastApiClient {
       photo_url: params.photo_url,
       athlete_name: params.athlete_name,
     });
+  }
+
+  /** Upload a photo file to complete athlete profile (multipart). Use when user has no photo yet. */
+  async addPhotoUpload(params: {
+    athlete_id: string;
+    photo: File;
+    athlete_name?: string;
+  }): Promise<Record<string, unknown>> {
+    const fd = new FormData();
+    fd.append('athlete_id', params.athlete_id);
+    fd.append('photo', params.photo);
+    if (params.athlete_name) fd.append('athlete_name', params.athlete_name);
+    return this._post('/api/athlete/add-photo-upload', fd);
   }
 
   // ——— Sessions ———

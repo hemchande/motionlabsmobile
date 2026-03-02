@@ -22,6 +22,7 @@ import {
   MessageSquare,
   Lightbulb,
   Square,
+  Home,
 } from 'lucide-react';
 import {
   getAllAlerts,
@@ -47,6 +48,7 @@ import {
 import { Stream } from '@cloudflare/stream-react';
 import { StreamVideoPlayer } from '../StreamVideoPlayer';
 import { LiveCameraFeed } from '../LiveCameraFeed';
+import { LiveCameraWSFeed } from '../LiveCameraWSFeed';
 import { AlertBaselinesDisplay, AthleteBaselinesDisplay, type BaselineDocument } from '../AlertBaselinesDisplay';
 
 const CLOUDFLARE_TEST_VIDEO_ID = '325aefecad13e675e5066ed181dd03bf';
@@ -91,11 +93,11 @@ export function MobileRecordVideo({
       </div>
 
       {/* Main Options */}
-      <div className="flex-1 px-4 py-6">
+      <div className="flex-1 overflow-y-auto px-4 py-6">
         <p className="text-gray-600 text-sm mb-6">Choose how to add video</p>
 
-        {/* Record Live */}
-        <button 
+        {/* Record Live - commented out for now */}
+        {/* <button 
           onClick={onStartLiveSession}
           className="w-full bg-blue-600 rounded-2xl p-6 mb-4 active:bg-blue-700"
         >
@@ -109,10 +111,10 @@ export function MobileRecordVideo({
             </div>
             <ChevronRight className="w-6 h-6 text-white flex-shrink-0" />
           </div>
-        </button>
+        </button> */}
 
-        {/* Upload Video */}
-        <button className="w-full bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50">
+        {/* Upload Video - commented out for now */}
+        {/* <button className="w-full bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center flex-shrink-0">
               <Upload className="w-8 h-8 text-gray-600" />
@@ -123,10 +125,10 @@ export function MobileRecordVideo({
             </div>
             <ChevronRight className="w-6 h-6 text-gray-400 flex-shrink-0" />
           </div>
-        </button>
+        </button> */}
 
-        {/* Live Camera Test + Stop Recording */}
-        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+        {/* Live Camera Test + Stop Recording - commented out for now */}
+        {/* <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-3">
             <p className="text-gray-700 text-sm font-medium flex items-center gap-2">
               <Camera className="w-4 h-4 text-gray-500" />
@@ -161,53 +163,18 @@ export function MobileRecordVideo({
           <p className="text-gray-500 text-xs mt-2">
             Feed from Athlete Coach API (port 8004)
           </p>
-        </div>
+        </div> */}
 
         {/* Cloudflare Stream Player Test */}
-        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl">
-          <p className="text-gray-700 text-sm font-medium mb-3 flex items-center gap-2">
-            <Video className="w-4 h-4" />
-            Cloudflare Stream Player Test
+        {/* WebSocket Feed Test */}
+        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
+          <LiveCameraWSFeed 
+            showMetrics={true}
+            showAthleteInfo={true}
+          />
+          <p className="text-gray-500 text-xs mt-2">
+            WebSocket stream with real-time pose estimation (port 8010)
           </p>
-          <div className="rounded-xl overflow-hidden bg-black aspect-video">
-            <Stream controls src={CLOUDFLARE_TEST_VIDEO_ID} />
-          </div>
-        </div>
-
-        {/* Recent Uploads */}
-        <div className="mt-8">
-          <p className="text-gray-700 text-sm mb-3 font-medium">Recent Uploads</p>
-          <div className="space-y-2">
-            {[
-              { name: 'Practice Session', date: 'Today', status: 'Processing', progress: 65 },
-              { name: 'Vault Training', date: 'Yesterday', status: 'Complete', progress: 100 },
-            ].map((video, i) => (
-              <div key={i} className="bg-white border border-gray-200 rounded-xl p-3">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-12 h-12 bg-gray-200 rounded-lg flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-gray-900 text-sm truncate">{video.name}</p>
-                    <p className="text-gray-500 text-xs">{video.date}</p>
-                  </div>
-                  <span className={`px-2 py-1 rounded text-xs flex-shrink-0 ${
-                    video.status === 'Processing' 
-                      ? 'bg-yellow-100 text-yellow-700'
-                      : 'bg-green-100 text-green-700'
-                  }`}>
-                    {video.status}
-                  </span>
-                </div>
-                {video.status === 'Processing' && (
-                  <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-blue-600 transition-all"
-                      style={{ width: `${video.progress}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -598,17 +565,27 @@ export function MobileAthleteDetail({
 }
 
 // Mobile Alerts List (uses athleteCoachFastApiClient via athleteCoachService)
-// Coach flow: fetches alerts with athlete dropdown selector.
-export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number) => void }) {
+// Coach flow: fetches alerts with athlete dropdown. Athlete flow: pass filterAthleteId to see only own alerts.
+export function MobileAlertsList({
+  onNavigate,
+  filterAthleteId,
+  isAthlete,
+}: {
+  onNavigate?: (screen: number) => void;
+  filterAthleteId?: string;
+  isAthlete?: boolean;
+}) {
   const [loading, setLoading] = useState(false);
   const [alerts, setAlerts] = useState<AlertPayload[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedAlert, setSelectedAlert] = useState<AlertPayload | null>(null);
   const [athletes, setAthletes] = useState<AthleteOption[]>([]);
-  const [selectedAthleteId, setSelectedAthleteId] = useState<string>('all');
+  const [selectedAthleteId, setSelectedAthleteId] = useState<string>(filterAthleteId ?? 'all');
   const [showAthleteDropdown, setShowAthleteDropdown] = useState(false);
+  const effectiveFilter = filterAthleteId ?? selectedAthleteId;
 
   const fetchAthletes = useCallback(async () => {
+    if (filterAthleteId) return; // athlete view: no need to load full roster
     try {
       const res = (await getAllAthletes({ limit: 100 })) as
         | { athletes?: Array<{ athlete_id?: string; athlete_name?: string }> }
@@ -627,17 +604,23 @@ export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number)
     } catch {
       setAthletes([]);
     }
-  }, []);
+  }, [filterAthleteId]);
 
   const fetchAlerts = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       let res: { alerts?: AlertPayload[] };
-      if (selectedAthleteId === 'all') {
+      // Athletes must only see their own alerts - never use 'all'
+      if (isAthlete && !filterAthleteId) {
+        setAlerts([]);
+        setLoading(false);
+        return;
+      }
+      if (effectiveFilter === 'all') {
         res = (await getAllAlerts({ limit: 50 })) as { alerts?: AlertPayload[] };
       } else {
-        res = (await getAthleteAlerts(selectedAthleteId, { limit: 50 })) as { alerts?: AlertPayload[] };
+        res = (await getAthleteAlerts(effectiveFilter, { limit: 50 })) as { alerts?: AlertPayload[] };
       }
       const list = Array.isArray(res?.alerts) ? res.alerts : [];
       setAlerts(list);
@@ -647,7 +630,11 @@ export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number)
     } finally {
       setLoading(false);
     }
-  }, [selectedAthleteId]);
+  }, [effectiveFilter, isAthlete, filterAthleteId]);
+
+  useEffect(() => {
+    if (filterAthleteId) setSelectedAthleteId(filterAthleteId);
+  }, [filterAthleteId]);
 
   useEffect(() => {
     fetchAthletes();
@@ -668,8 +655,9 @@ export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number)
     );
   }
 
-  const selectedLabel =
-    selectedAthleteId === 'all'
+  const selectedLabel = filterAthleteId
+    ? 'My Alerts'
+    : selectedAthleteId === 'all'
       ? 'All Athletes'
       : athletes.find((a) => a.athlete_id === selectedAthleteId)?.athlete_name ?? selectedAthleteId;
 
@@ -696,44 +684,46 @@ export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number)
             )}
           </button>
         </div>
-        {/* Athlete dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setShowAthleteDropdown(!showAthleteDropdown)}
-            className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-left text-sm"
-          >
-            <span className="text-gray-900 font-medium truncate">{selectedLabel}</span>
-            <ChevronDown className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${showAthleteDropdown ? 'rotate-180' : ''}`} />
-          </button>
-          {showAthleteDropdown && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
-              <button
-                onClick={() => {
-                  setSelectedAthleteId('all');
-                  setShowAthleteDropdown(false);
-                }}
-                className={`w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 ${selectedAthleteId === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
-              >
-                All Athletes
-              </button>
-              {athletes.map((a) => (
+        {/* Athlete dropdown (hidden when athlete view – filterAthleteId set) */}
+        {!filterAthleteId && (
+          <div className="relative">
+            <button
+              onClick={() => setShowAthleteDropdown(!showAthleteDropdown)}
+              className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-left text-sm"
+            >
+              <span className="text-gray-900 font-medium truncate">{selectedLabel}</span>
+              <ChevronDown className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${showAthleteDropdown ? 'rotate-180' : ''}`} />
+            </button>
+            {showAthleteDropdown && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
                 <button
-                  key={a.athlete_id}
                   onClick={() => {
-                    setSelectedAthleteId(a.athlete_id);
+                    setSelectedAthleteId('all');
                     setShowAthleteDropdown(false);
                   }}
-                  className={`w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 truncate ${selectedAthleteId === a.athlete_id ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                  className={`w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 ${selectedAthleteId === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
                 >
-                  {a.athlete_name || a.athlete_id}
+                  All Athletes
                 </button>
-              ))}
-              {athletes.length === 0 && (
-                <p className="px-3 py-2.5 text-gray-500 text-sm">No athletes found</p>
-              )}
-            </div>
-          )}
-        </div>
+                {athletes.map((a) => (
+                  <button
+                    key={a.athlete_id}
+                    onClick={() => {
+                      setSelectedAthleteId(a.athlete_id);
+                      setShowAthleteDropdown(false);
+                    }}
+                    className={`w-full px-3 py-2.5 text-left text-sm hover:bg-gray-50 truncate ${selectedAthleteId === a.athlete_id ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                  >
+                    {a.athlete_name || a.athlete_id}
+                  </button>
+                ))}
+                {athletes.length === 0 && (
+                  <p className="px-3 py-2.5 text-gray-500 text-sm">No athletes found</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
@@ -792,8 +782,17 @@ export function MobileAlertsList({ onNavigate }: { onNavigate?: (screen: number)
             onClick={() => onNavigate?.(1)}
             className="flex flex-col items-center py-2 text-gray-400"
           >
-            <Users className="w-6 h-6 mb-1" />
-            <span className="text-xs">Roster</span>
+            {isAthlete ? (
+              <>
+                <Home className="w-6 h-6 mb-1" />
+                <span className="text-xs">Home</span>
+              </>
+            ) : (
+              <>
+                <Users className="w-6 h-6 mb-1" />
+                <span className="text-xs">Roster</span>
+              </>
+            )}
           </button>
           <button
             onClick={() => onNavigate?.(3)}
@@ -1288,13 +1287,15 @@ export function MobileAlertDetail({
   );
 }
 
-// Mobile Quick Actions Screen
-export function MobileQuickActions({ 
-  onStartLiveSession, 
-  onNavigate 
-}: { 
+// Mobile Quick Actions Screen (coach: Team Roster; athlete: Home, no roster)
+export function MobileQuickActions({
+  onStartLiveSession,
+  onNavigate,
+  isAthlete,
+}: {
   onStartLiveSession?: () => void;
   onNavigate?: (screen: number) => void;
+  isAthlete?: boolean;
 }) {
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -1306,33 +1307,42 @@ export function MobileQuickActions({
       {/* Action Grid */}
       <div className="flex-1 px-4 py-6">
         <div className="grid grid-cols-2 gap-4">
-          <button 
-            onClick={onStartLiveSession}
+          <button
+            onClick={() => onNavigate?.(3)}
             className="bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50"
           >
             <Camera className="w-8 h-8 text-blue-600 mb-3" />
             <p className="text-gray-900 text-sm font-medium">Record Session</p>
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(3)}
             className="bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50"
           >
             <Upload className="w-8 h-8 text-blue-600 mb-3" />
             <p className="text-gray-900 text-sm font-medium">Upload Video</p>
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(5)}
             className="bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50"
           >
             <Bell className="w-8 h-8 text-red-600 mb-3" />
             <p className="text-gray-900 text-sm font-medium">View Alerts</p>
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(1)}
             className="bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50"
           >
-            <Users className="w-8 h-8 text-green-600 mb-3" />
-            <p className="text-gray-900 text-sm font-medium">Team Roster</p>
+            {isAthlete ? (
+              <>
+                <Home className="w-8 h-8 text-green-600 mb-3" />
+                <p className="text-gray-900 text-sm font-medium">Home</p>
+              </>
+            ) : (
+              <>
+                <Users className="w-8 h-8 text-green-600 mb-3" />
+                <p className="text-gray-900 text-sm font-medium">Team Roster</p>
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -1340,28 +1350,37 @@ export function MobileQuickActions({
       {/* Bottom Tab Bar */}
       <div className="bg-white border-t border-gray-200 px-6 py-2">
         <div className="flex items-center justify-around">
-          <button 
+          <button
             onClick={() => onNavigate?.(1)}
             className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
           >
-            <Users className="w-6 h-6 mb-1" />
-            <span className="text-xs">Roster</span>
+            {isAthlete ? (
+              <>
+                <Home className="w-6 h-6 mb-1" />
+                <span className="text-xs">Home</span>
+              </>
+            ) : (
+              <>
+                <Users className="w-6 h-6 mb-1" />
+                <span className="text-xs">Roster</span>
+              </>
+            )}
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(3)}
             className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
           >
             <Camera className="w-6 h-6 mb-1" />
             <span className="text-xs">Record</span>
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(5)}
             className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
           >
             <Bell className="w-6 h-6 mb-1" />
             <span className="text-xs">Alerts</span>
           </button>
-          <button 
+          <button
             onClick={() => onNavigate?.(6)}
             className="flex flex-col items-center py-2 text-blue-600 active:opacity-70"
           >

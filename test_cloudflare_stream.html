@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloudflare Stream Test - Athlete Coach API</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .test-section {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #2563eb;
+    }
+    h2 {
+      color: #1e40af;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 10px;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    .error {
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 15px;
+      border-radius: 6px;
+      margin: 10px 0;
+    }
+    .success {
+      background: #d1fae5;
+      color: #065f46;
+      padding: 15px;
+      border-radius: 6px;
+      margin: 10px 0;
+    }
+    pre {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 15px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+    .video-container {
+      margin: 20px 0;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    iframe {
+      width: 100%;
+      aspect-ratio: 16/9;
+      border: none;
+    }
+    .input-group {
+      margin: 15px 0;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 5px;
+      color: #374151;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .api-url {
+      color: #0891b2;
+      font-family: monospace;
+      font-size: 13px;
+      background: #ecfeff;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    .loading {
+      color: #6b7280;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎥 Cloudflare Stream Video Test</h1>
+  <p>Test how session videos are fetched from the Athlete Coach API and displayed.</p>
+
+  <!-- API Configuration -->
+  <div class="test-section">
+    <h2>⚙️ API Configuration</h2>
+    <div class="input-group">
+      <label>API Base URL</label>
+      <input type="text" id="apiUrl" value="https://athlete-coach-fastapi-630016859450.europe-west1.run.app">
+    </div>
+  </div>
+
+  <!-- Test 1: Get All Sessions -->
+  <div class="test-section">
+    <h2>Test 1: Get All Sessions</h2>
+    <p>Fetch all sessions and find ones with video URLs</p>
+    <button onclick="testGetAllSessions()">Fetch All Sessions</button>
+    <div id="sessions-result"></div>
+  </div>
+
+  <!-- Test 2: Get Specific Session -->
+  <div class="test-section">
+    <h2>Test 2: Get Specific Session</h2>
+    <p>Get a session by ID to retrieve its video URL</p>
+    <div class="input-group">
+      <label>Session ID</label>
+      <input type="text" id="sessionId" placeholder="e.g. athlete_002_session_66">
+    </div>
+    <button onclick="testGetSession()">Fetch Session</button>
+    <button onclick="testGetSession(true)">Fetch Session + Play Video</button>
+    <div id="session-result"></div>
+    <div id="session-video"></div>
+  </div>
+
+  <!-- Test 3: Get Alert Videos -->
+  <div class="test-section">
+    <h2>Test 3: Get Alert Videos</h2>
+    <p>Fetch sessions for an alert to get multiple video URLs</p>
+    <div class="input-group">
+      <label>Alert ID</label>
+      <input type="text" id="alertId" placeholder="e.g. alert_123">
+    </div>
+    <button onclick="testGetAlertSessions()">Fetch Alert Sessions</button>
+    <div id="alert-result"></div>
+  </div>
+
+  <!-- Test 4: Display Video -->
+  <div class="test-section">
+    <h2>Test 4: Display Video Directly</h2>
+    <p>Enter a Cloudflare Stream URL to test video playback</p>
+    <div class="input-group">
+      <label>Cloudflare Stream URL</label>
+      <input type="text" id="videoUrl" placeholder="https://customer-xxx.cloudflarestream.com/xxx/manifest/video.m3u8">
+    </div>
+    <button onclick="displayVideo()">Display Video</button>
+    <div id="direct-video"></div>
+  </div>
+
+  <script>
+    const API_BASE = () => document.getElementById('apiUrl').value;
+
+    // Helper: Convert Cloudflare m3u8 URL to iframe embed URL
+    function toCloudflareIframeUrl(m3u8Url) {
+      const match = m3u8Url.match(/https:\/\/customer-([^.]+)\.cloudflarestream\.com\/([^/]+)\//);
+      if (match) {
+        return `https://customer-${match[1]}.cloudflarestream.com/${match[2]}/iframe`;
+      }
+      return null;
+    }
+
+    // Helper: Display result
+    function showResult(elementId, html) {
+      document.getElementById(elementId).innerHTML = html;
+    }
+
+    // Helper: Make API call
+    async function apiCall(endpoint) {
+      const url = `${API_BASE()}${endpoint}`;
+      console.log('🔌 API Call:', url);
+      
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        console.log('✅ Response:', data);
+        return { success: true, data };
+      } catch (error) {
+        console.error('❌ Error:', error);
+        return { success: false, error: error.message };
+      }
+    }
+
+    // Test 1: Get all sessions
+    async function testGetAllSessions() {
+      showResult('sessions-result', '<p class="loading">Loading sessions...</p>');
+      
+      const result = await apiCall('/api/sessions?limit=50');
+      
+      if (!result.success) {
+        showResult('sessions-result', `<div class="error">❌ Error: ${result.error}</div>`);
+        return;
+      }
+
+      const sessions = result.data.sessions || [];
+      const sessionsWithVideo = sessions.filter(s => s.cloudflare_stream_url);
+
+      let html = `<div class="success">✅ Found ${sessions.length} sessions, ${sessionsWithVideo.length} with videos</div>`;
+      html += '<pre>' + JSON.stringify(result.data, null, 2) + '</pre>';
+
+      if (sessionsWithVideo.length > 0) {
+        html += '<h3>Sessions with Videos:</h3>';
+        sessionsWithVideo.forEach(session => {
+          html += `
+            <div style="margin: 10px 0; padding: 10px; background: #f9fafb; border-radius: 6px;">
+              <strong>Session ID:</strong> <span class="api-url">${session.session_id}</span><br>
+              <strong>Athlete:</strong> ${session.athlete_name || session.athlete_id}<br>
+              <strong>Video URL:</strong> <span class="api-url" style="font-size: 11px;">${session.cloudflare_stream_url}</span><br>
+              <button onclick="playSessionVideo('${session.session_id}', '${session.cloudflare_stream_url}')">▶️ Play Video</button>
+            </div>
+          `;
+        });
+      }
+
+      showResult('sessions-result', html);
+    }
+
+    // Test 2: Get specific session
+    async function testGetSession(playVideo = false) {
+      const sessionId = document.getElementById('sessionId').value;
+      if (!sessionId) {
+        showResult('session-result', '<div class="error">❌ Please enter a session ID</div>');
+        return;
+      }
+
+      showResult('session-result', '<p class="loading">Loading session...</p>');
+      
+      const result = await apiCall(`/api/session/${encodeURIComponent(sessionId)}`);
+      
+      if (!result.success) {
+        showResult('session-result', `<div class="error">❌ Error: ${result.error}</div>`);
+        return;
+      }
+
+      const session = result.data.session || result.data;
+      const videoUrl = session.cloudflare_stream_url;
+
+      let html = `<div class="success">✅ Session fetched successfully</div>`;
+      html += '<pre>' + JSON.stringify(session, null, 2) + '</pre>';
+
+      if (videoUrl) {
+        html += `
+          <div style="margin-top: 15px; padding: 15px; background: #ecfeff; border-radius: 6px;">
+            <strong>📹 Video URL:</strong><br>
+            <code class="api-url" style="word-break: break-all;">${videoUrl}</code>
+          </div>
+        `;
+
+        if (playVideo) {
+          const iframeUrl = toCloudflareIframeUrl(videoUrl);
+          if (iframeUrl) {
+            showResult('session-video', `
+              <div class="video-container">
+                <iframe src="${iframeUrl}" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+              </div>
+            `);
+          } else {
+            showResult('session-video', `<div class="error">❌ Could not convert to iframe URL</div>`);
+          }
+        }
+      } else {
+        html += '<div style="margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 6px;">⚠️ No video URL found for this session</div>';
+      }
+
+      showResult('session-result', html);
+    }
+
+    // Test 3: Get alert sessions
+    async function testGetAlertSessions() {
+      const alertId = document.getElementById('alertId').value;
+      if (!alertId) {
+        showResult('alert-result', '<div class="error">❌ Please enter an alert ID</div>');
+        return;
+      }
+
+      showResult('alert-result', '<p class="loading">Loading alert sessions...</p>');
+      
+      const result = await apiCall(`/api/alert/${encodeURIComponent(alertId)}/sessions`);
+      
+      if (!result.success) {
+        showResult('alert-result', `<div class="error">❌ Error: ${result.error}</div>`);
+        return;
+      }
+
+      const sessions = result.data.sessions || [];
+      const sessionsWithVideo = sessions.filter(s => s.cloudflare_stream_url);
+
+      let html = `<div class="success">✅ Found ${sessions.length} sessions for alert, ${sessionsWithVideo.length} with videos</div>`;
+      html += '<pre>' + JSON.stringify(result.data, null, 2) + '</pre>';
+
+      if (sessionsWithVideo.length > 0) {
+        html += '<h3>Alert Videos:</h3>';
+        sessionsWithVideo.forEach((session, idx) => {
+          const iframeUrl = toCloudflareIframeUrl(session.cloudflare_stream_url);
+          if (iframeUrl) {
+            html += `
+              <div style="margin: 15px 0;">
+                <strong>Video ${idx + 1}:</strong> ${session.session_id}<br>
+                <div class="video-container" style="margin-top: 10px;">
+                  <iframe src="${iframeUrl}" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                </div>
+              </div>
+            `;
+          }
+        });
+      }
+
+      showResult('alert-result', html);
+    }
+
+    // Test 4: Display video directly
+    function displayVideo() {
+      const videoUrl = document.getElementById('videoUrl').value;
+      if (!videoUrl) {
+        showResult('direct-video', '<div class="error">❌ Please enter a video URL</div>');
+        return;
+      }
+
+      const iframeUrl = toCloudflareIframeUrl(videoUrl);
+      if (iframeUrl) {
+        showResult('direct-video', `
+          <div class="success">✅ Video loaded successfully</div>
+          <div class="video-container">
+            <iframe src="${iframeUrl}" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+          </div>
+        `);
+      } else {
+        showResult('direct-video', `<div class="error">❌ Invalid Cloudflare Stream URL format</div>`);
+      }
+    }
+
+    // Helper: Play session video
+    function playSessionVideo(sessionId, videoUrl) {
+      document.getElementById('sessionId').value = sessionId;
+      testGetSession(true);
+    }
+
+    // Auto-fill with example data
+    window.onload = () => {
+      console.log('🎥 Cloudflare Stream Test Page Loaded');
+      console.log('API:', API_BASE());
+    };
+  </script>
+</body>
+</html>

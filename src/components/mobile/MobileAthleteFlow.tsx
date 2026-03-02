@@ -12,17 +12,27 @@ import {
   Home,
   TrendingUp,
   Eye,
-  EyeOff
+  EyeOff,
+  Camera,
+  Bell,
 } from 'lucide-react';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
 import { useAuth } from '../../contexts/FirebaseAuthContext';
+import { useUser } from '../../contexts/UserContext';
+import {
+  MobileRecordVideo,
+  MobileLiveRecording,
+  MobileAlertsList,
+  MobileQuickActions,
+} from './MobileCoachFlowPart2';
 
-/** Screens that require login - temporarily disabled for dev */
-const ATHLETE_PROTECTED_SCREENS: number[] = [];
+/** Same structure as coach: 0=Login, 1=Home (no roster), 2=unused, 3=Record, 4=Live, 5=Alerts, 6=Quick Actions */
+const ATHLETE_PROTECTED_SCREENS: number[] = [1, 2, 3, 4, 5, 6];
 
 export function MobileAthleteFlow({ currentScreen, onNavigate }: { currentScreen: number; onNavigate?: (screen: number) => void }) {
   const { isAuthenticated } = useAuth();
+  const { user, athleteId } = useUser();
 
   const wrappedOnNavigate = (screen: number) => {
     if (!isAuthenticated && ATHLETE_PROTECTED_SCREENS.includes(screen)) {
@@ -43,17 +53,25 @@ export function MobileAthleteFlow({ currentScreen, onNavigate }: { currentScreen
     : currentScreen;
 
   const screens = [
-    <MobileAthleteLogin key="login" />,
-    <MobileAthleteProfile key="profile" />,
-    <MobileMyClips key="clips" />,
-    <MobileClipConfirmation key="confirmation" />
+    <MobileAthleteLogin key="login" onNavigate={wrappedOnNavigate} />,
+    <MobileAthleteHome key="home" onNavigate={wrappedOnNavigate} />,
+    <MobileAthleteHome key="home2" onNavigate={wrappedOnNavigate} />,
+    <MobileRecordVideo key="record" onNavigate={wrappedOnNavigate} />,
+    <MobileLiveRecording key="live" onNavigate={wrappedOnNavigate} />,
+    <MobileAlertsList
+      key="alerts"
+      onNavigate={wrappedOnNavigate}
+      filterAthleteId={athleteId ?? undefined}
+      isAthlete
+    />,
+    <MobileQuickActions key="actions" onNavigate={wrappedOnNavigate} isAthlete />,
   ];
 
   return screens[effectiveScreen];
 }
 
-// Mobile Athlete Login
-function MobileAthleteLogin() {
+// Mobile Athlete Login (navigate to Home screen 1 on success)
+function MobileAthleteLogin({ onNavigate }: { onNavigate: (screen: number) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -68,27 +86,39 @@ function MobileAthleteLogin() {
       const provider = new GoogleAuthProvider();
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
-      
+
       console.log('✅ Google login successful:', user.email);
-      
-      // Store user info
+
       localStorage.setItem('userEmail', user.email || '');
       localStorage.setItem('userId', user.uid);
       localStorage.setItem('userName', user.displayName || '');
-      
-      // You can navigate to athlete dashboard here if needed
+
+      // Do not navigate – let auth state handler run. If user has no Firestore doc (e.g. invited athlete),
+      // we will show profile completion (GoogleProfileCompletion) instead of Home.
+      // onNavigate(1);
     } catch (err: any) {
-      console.error('Google login error:', err);
+      const msg = err?.error?.message ?? err?.data?.error?.message ?? err?.message;
+      const isInvalidCreds = msg === 'INVALID_LOGIN_CREDENTIALS' || err?.code === 'auth/invalid-credential';
+      console.error('Google login error:', { err, message: msg, data: err?.data, error: err?.error });
+
       let errorMessage = 'Google sign-in failed. Please try again.';
-      
-      if (err.code === 'auth/popup-closed-by-user') {
+
+      if (isInvalidCreds) {
+        errorMessage = 'Google sign-in could not complete. Use email/password to sign in, or ensure the app has iOS Google setup (GoogleService-Info.plist + URL scheme). See GOOGLE_SIGNIN_XCODE_TROUBLESHOOTING.md.';
+      } else if (err?.code === 'auth/popup-closed-by-user') {
         errorMessage = 'Sign-in popup was closed. Please try again.';
-      } else if (err.code === 'auth/popup-blocked') {
+      } else if (err?.code === 'auth/popup-blocked') {
         errorMessage = 'Popup was blocked. Please allow popups and try again.';
-      } else if (err.code === 'auth/network-request-failed') {
+      } else if (err?.code === 'auth/network-request-failed') {
         errorMessage = 'Network error. Please check your connection.';
+      } else if (err?.code === 'auth/operation-not-allowed') {
+        errorMessage = 'Google sign-in is not enabled for this app. Contact support.';
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        errorMessage = 'This app is not authorized for sign-in. Contact support.';
+      } else if (err?.code || err?.message) {
+        errorMessage = err?.message || msg || `${err?.code}. See GOOGLE_SIGNIN_XCODE_TROUBLESHOOTING.md`;
       }
-      
+
       setError(errorMessage);
     } finally {
       setGoogleLoading(false);
@@ -117,36 +147,42 @@ function MobileAthleteLogin() {
       // Store user info if needed
       localStorage.setItem('userEmail', user.email || '');
       localStorage.setItem('userId', user.uid);
-      
-      // You can navigate to athlete dashboard here if needed
-      // For now, just show success
+
+      onNavigate(1);
     } catch (err: any) {
-      console.error('Login error:', err);
+      const code = err?.code ?? err?.data?.error?.message ?? '';
+      const msg = err?.message ?? '';
+      console.error('Login error:', { code, message: msg, full: err });
       let errorMessage = 'Login failed. Please try again.';
-      
-      switch (err.code) {
-        case 'auth/user-not-found':
-          errorMessage = 'No account found with this email address.';
-          break;
-        case 'auth/wrong-password':
-          errorMessage = 'Incorrect password.';
-          break;
-        case 'auth/invalid-email':
-          errorMessage = 'Invalid email address.';
-          break;
-        case 'auth/user-disabled':
-          errorMessage = 'This account has been disabled.';
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = 'Too many failed attempts. Please try again later.';
-          break;
-        case 'auth/network-request-failed':
-          errorMessage = 'Network error. Please check your connection.';
-          break;
-        default:
-          errorMessage = err.message || 'Login failed. Please try again.';
+      const backendMsg = err?.data?.error?.message;
+
+      if (backendMsg === 'INVALID_LOGIN_CREDENTIALS' || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect email or password. If you signed up with Google, use the "Sign in with Google" button instead.';
+      } else {
+        switch (err.code) {
+          case 'auth/user-not-found':
+            errorMessage = 'No account found with this email address. Use Sign in with Google if you created the account with Google.';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = 'Invalid email address.';
+            break;
+          case 'auth/user-disabled':
+            errorMessage = 'This account has been disabled.';
+            break;
+          case 'auth/too-many-requests':
+            errorMessage = 'Too many failed attempts. Please try again later.';
+            break;
+          case 'auth/network-request-failed':
+            errorMessage = 'Network error. Please check your connection.';
+            break;
+          case 'auth/operation-not-allowed':
+            errorMessage = 'Email/password sign-in is not enabled. Use Sign in with Google or contact support.';
+            break;
+          default:
+            errorMessage = msg || 'Login failed. Please try again.';
+        }
       }
-      
+
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -172,7 +208,15 @@ function MobileAthleteLogin() {
           <User className="w-12 h-12 text-white" />
         </div>
         <h1 className="text-2xl text-gray-900 mb-2 text-center">MotionLabs</h1>
-        <p className="text-gray-600 text-sm mb-8 text-center">Athlete Portal</p>
+        <p className="text-gray-600 text-sm mb-4 text-center">Athlete Portal</p>
+
+        {/* Invite banner when opened from invitation link */}
+        {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('invite') && new URLSearchParams(window.location.search).get('mode') === 'signup' && (
+          <div className="w-full mb-6 p-4 bg-green-50 border border-green-200 rounded-xl">
+            <p className="text-green-800 text-sm text-center font-medium">You&apos;re invited by your coach</p>
+            <p className="text-green-700 text-xs text-center mt-1">Sign up or sign in with the email your coach used to invite you.</p>
+          </div>
+        )}
 
         {/* Error Message */}
         {error && (
@@ -264,6 +308,17 @@ function MobileAthleteLogin() {
           >
             Need Help Signing In?
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const base = window.location.pathname + (window.location.hash || '');
+              window.location.href = base + (base.includes('?') ? '&' : '?') + 'clear_auth=1';
+            }}
+            className="w-full text-gray-500 text-xs mt-6 underline hover:text-gray-700"
+          >
+            Start fresh (clear cache & sign out)
+          </button>
         </form>
 
         <div className="mt-8 text-center">
@@ -276,7 +331,84 @@ function MobileAthleteLogin() {
   );
 }
 
-// Mobile Athlete Profile
+// Athlete Home (same flow as coach but no roster – dashboard with same bottom nav)
+function MobileAthleteHome({ onNavigate }: { onNavigate: (screen: number) => void }) {
+  const { user } = useAuth();
+
+  return (
+    <div className="h-full flex flex-col bg-gray-50">
+      <div className="bg-white border-b border-gray-200 px-4 py-3">
+        <h1 className="text-xl text-gray-900">Home</h1>
+        <p className="text-gray-600 text-sm mt-0.5">
+          {user?.fullName ? `Welcome, ${user.fullName}` : 'Welcome'}
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-4">
+          <p className="text-gray-700 text-sm mb-2">Quick actions</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => onNavigate(3)}
+              className="flex items-center gap-2 p-3 border border-gray-200 rounded-xl text-left active:bg-gray-50"
+            >
+              <Camera className="w-5 h-5 text-green-600" />
+              <span className="text-sm font-medium text-gray-900">Record Session</span>
+            </button>
+            <button
+              onClick={() => onNavigate(5)}
+              className="flex items-center gap-2 p-3 border border-gray-200 rounded-xl text-left active:bg-gray-50"
+            >
+              <Bell className="w-5 h-5 text-red-600" />
+              <span className="text-sm font-medium text-gray-900">View Alerts</span>
+            </button>
+          </div>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+          <p className="text-blue-900 text-sm">
+            Your coach may share session clips and alerts here. Use Record to capture video, or check Alerts for updates.
+          </p>
+        </div>
+      </div>
+
+      {/* Same bottom tab bar as coach: Home, Record, Alerts, Settings */}
+      <div className="bg-white border-t border-gray-200 px-6 py-2 safe-area-bottom">
+        <div className="flex items-center justify-around">
+          <button
+            onClick={() => onNavigate(1)}
+            className="flex flex-col items-center py-2 text-green-600 active:opacity-70"
+          >
+            <Home className="w-6 h-6 mb-1" />
+            <span className="text-xs">Home</span>
+          </button>
+          <button
+            onClick={() => onNavigate(3)}
+            className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
+          >
+            <Camera className="w-6 h-6 mb-1" />
+            <span className="text-xs">Record</span>
+          </button>
+          <button
+            onClick={() => onNavigate(5)}
+            className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
+          >
+            <Bell className="w-6 h-6 mb-1" />
+            <span className="text-xs">Alerts</span>
+          </button>
+          <button
+            onClick={() => onNavigate(6)}
+            className="flex flex-col items-center py-2 text-gray-400 active:opacity-70"
+          >
+            <Settings className="w-6 h-6 mb-1" />
+            <span className="text-xs">Settings</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mobile Athlete Profile (kept for reference / reuse; not in main flow)
 function MobileAthleteProfile() {
   return (
     <div className="h-full flex flex-col bg-gray-50">

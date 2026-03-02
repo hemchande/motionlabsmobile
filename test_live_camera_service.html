@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Camera Service (GPU) – endpoint test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: #374151; }
+    label { display: block; margin-top: 0.5rem; font-weight: 500; }
+    input { width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    button { margin-right: 0.5rem; margin-top: 0.5rem; padding: 0.5rem 1rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    button.danger { background: #dc2626; } button.danger:hover { background: #b91c1c; }
+    .out { margin-top: 0.5rem; padding: 0.75rem; border-radius: 8px; white-space: pre-wrap; word-break: break-all; font-size: 0.8125rem; max-height: 200px; overflow-y: auto; }
+    .out.ok { background: #dcfce7; color: #166534; }
+    .out.err { background: #fee2e2; color: #991b1b; }
+    .out.info { background: #e0e7ff; color: #3730a3; }
+    .hint { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; }
+    a { color: #2563eb; }
+    .img-wrap { background: #000; border-radius: 8px; overflow: hidden; margin-top: 0.5rem; }
+    .img-wrap img { width: 100%; height: auto; display: block; }
+    table { font-size: 0.875rem; width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #e5e7eb; }
+    th { color: #6b7280; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <h1>Live Camera Service (GPU) – endpoint test</h1>
+  <p>Base URL: <strong>https://live-camera-gpu-630016859450.europe-west1.run.app</strong> (same endpoints as non-GPU; <code>/health</code> returns GPU info on GPU service).</p>
+
+  <label>Override base URL (optional)</label>
+  <input type="url" id="baseUrl" value="https://live-camera-gpu-630016859450.europe-west1.run.app" placeholder="https://..." />
+  <p class="hint">No trailing slash. Use non-GPU or local (e.g. http://localhost:8010) if you prefer.</p>
+
+  <h2>Endpoints</h2>
+  <table>
+    <tr><th>Endpoint</th><th>Method</th><th>Description</th></tr>
+    <tr><td>/api/live-camera</td><td>GET</td><td>HTML page with MJPEG stream</td></tr>
+    <tr><td>/api/live-camera/client-demo</td><td>GET</td><td>Client webcam demo (WebSocket)</td></tr>
+    <tr><td>/api/live-camera/video_feed</td><td>GET</td><td>MJPEG stream from server camera</td></tr>
+    <tr><td>/api/live-camera/stop</td><td>POST</td><td>Stop camera capture</td></tr>
+    <tr><td>/api/live-camera/ws</td><td>WebSocket</td><td>Client webcam → annotated frames</td></tr>
+    <tr><td>/api/live-camera/process-frame</td><td>POST</td><td>REST: upload frame, get annotated frame + metrics</td></tr>
+    <tr><td>/api/live-camera/end-session</td><td>POST</td><td>End REST session</td></tr>
+    <tr><td>/health</td><td>GET</td><td>Health check (+ GPU info on GPU service)</td></tr>
+  </table>
+
+  <h2>1. Health check (GET /health)</h2>
+  <button id="btnHealth">GET /health</button>
+  <div id="outHealth" class="out" style="display: none;"></div>
+
+  <h2>2. MJPEG stream – server camera (GET /api/live-camera/video_feed)</h2>
+  <p class="hint">Stream from the service’s own camera. If the service has no camera, image may be empty or error.</p>
+  <div class="img-wrap">
+    <img id="mjpegImg" src="" alt="MJPEG feed" style="display: none;" />
+  </div>
+  <button id="btnStartMjpeg">Start MJPEG</button>
+  <button id="btnStopMjpeg" class="danger">Stop MJPEG</button>
+  <div id="outMjpeg" class="out" style="display: none;"></div>
+
+  <h2>3. Links</h2>
+  <p><a href="#" id="linkPage">/api/live-camera</a> – HTML page with MJPEG</p>
+  <p><a href="#" id="linkDemo">/api/live-camera/client-demo</a> – WebSocket client demo</p>
+
+  <h2>4. Stop camera (POST /api/live-camera/stop)</h2>
+  <button id="btnStop">POST /api/live-camera/stop</button>
+  <div id="outStop" class="out" style="display: none;"></div>
+
+  <h2>5. WebSocket (wss://.../api/live-camera/ws)</h2>
+  <p class="hint">Connect from this page to test. Requires client to send frames (see client-demo for full flow).</p>
+  <button id="btnWs">Connect WebSocket</button>
+  <button id="btnWsClose" class="danger" style="display: none;">Disconnect</button>
+  <div id="outWs" class="out" style="display: none;"></div>
+
+  <script>
+    function base() { return document.getElementById('baseUrl').value.replace(/\/$/, ''); }
+    function wssBase() {
+      const b = base();
+      return b.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
+    }
+
+    function showOut(id, text, isError) {
+      const el = document.getElementById(id);
+      el.style.display = 'block';
+      el.className = 'out ' + (isError ? 'err' : 'ok');
+      el.textContent = text;
+    }
+
+    // Health
+    document.getElementById('btnHealth').addEventListener('click', async () => {
+      const out = document.getElementById('outHealth');
+      out.style.display = 'block';
+      out.className = 'out info';
+      out.textContent = 'Loading...';
+      try {
+        const res = await fetch(base() + '/health', { method: 'GET', headers: { Accept: 'application/json' } });
+        const data = await res.json().catch(() => ({}));
+        const text = 'HTTP ' + res.status + '\n\n' + JSON.stringify(data, null, 2);
+        showOut('outHealth', text, !res.ok);
+      } catch (e) {
+        showOut('outHealth', 'Error: ' + (e.message || String(e)) + '\n\nCheck CORS / network.', true);
+      }
+    });
+
+    // MJPEG
+    const mjpegImg = document.getElementById('mjpegImg');
+    document.getElementById('btnStartMjpeg').addEventListener('click', () => {
+      const url = base() + '/api/live-camera/video_feed';
+      mjpegImg.src = url;
+      mjpegImg.style.display = 'block';
+      document.getElementById('outMjpeg').style.display = 'block';
+      document.getElementById('outMjpeg').className = 'out info';
+      document.getElementById('outMjpeg').textContent = 'Showing: ' + url;
+    });
+    document.getElementById('btnStopMjpeg').addEventListener('click', () => {
+      mjpegImg.src = '';
+      mjpegImg.style.display = 'none';
+      document.getElementById('outMjpeg').textContent = 'Stopped.';
+    });
+
+    // Links
+    document.getElementById('linkPage').href = base() + '/api/live-camera';
+    document.getElementById('linkPage').target = '_blank';
+    document.getElementById('linkDemo').href = base() + '/api/live-camera/client-demo';
+    document.getElementById('linkDemo').target = '_blank';
+
+    // POST stop
+    document.getElementById('btnStop').addEventListener('click', async () => {
+      const out = document.getElementById('outStop');
+      out.style.display = 'block';
+      out.className = 'out info';
+      out.textContent = 'Sending POST...';
+      try {
+        const res = await fetch(base() + '/api/live-camera/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: '{}',
+        });
+        const data = await res.json().catch(() => ({}));
+        showOut('outStop', 'HTTP ' + res.status + '\n\n' + JSON.stringify(data, null, 2), !res.ok);
+      } catch (e) {
+        showOut('outStop', 'Error: ' + (e.message || String(e)), true);
+      }
+    });
+
+    // WebSocket
+    let ws = null;
+    const outWs = document.getElementById('outWs');
+    const btnWs = document.getElementById('btnWs');
+    const btnWsClose = document.getElementById('btnWsClose');
+    function logWs(msg) {
+      outWs.style.display = 'block';
+      outWs.className = 'out info';
+      outWs.textContent = (outWs.textContent || '') + msg + '\n';
+    }
+    document.getElementById('btnWs').addEventListener('click', () => {
+      const url = wssBase() + '/api/live-camera/ws';
+      outWs.textContent = '';
+      logWs('Connecting to ' + url + ' ...');
+      try {
+        ws = new WebSocket(url);
+        ws.onopen = () => { logWs('WebSocket OPEN'); btnWsClose.style.display = 'inline-block'; };
+        ws.onclose = (e) => { logWs('WebSocket CLOSED code=' + e.code + ' reason=' + (e.reason || '')); btnWsClose.style.display = 'none'; ws = null; };
+        ws.onerror = () => logWs('WebSocket ERROR');
+        ws.onmessage = (e) => {
+          if (e.data instanceof Blob) logWs('Message: binary ' + e.data.size + ' bytes');
+          else logWs('Message: ' + String(e.data).slice(0, 200));
+        };
+      } catch (e) {
+        logWs('Error: ' + (e.message || String(e)));
+      }
+    });
+    document.getElementById('btnWsClose').addEventListener('click', () => {
+      if (ws) { ws.close(); ws = null; }
+      btnWsClose.style.display = 'none';
+    });
+  </script>
+</body>
+</html>
