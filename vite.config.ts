@@ -82,19 +82,26 @@
       target: 'esnext',
       outDir: 'build',
     },
-  server: {
-    port: 3000,
-    host: '0.0.0.0', // listen on all interfaces so phone on same Wi-Fi can connect
-    open: true,
-    strictPort: false,
-    // HTTPS enabled
-    https: {
-      key: fs.readFileSync(path.resolve(__dirname, '.cert/key.pem')),
-      cert: fs.readFileSync(path.resolve(__dirname, '.cert/cert.pem')),
-    },
-    headers: {
-      // Allow Google OAuth popup to call window.close() after sign-in
-      'Cross-Origin-Opener-Policy': 'same-origin-unsafe-allow-popups',
-    },
-  },
+  server: (() => {
+    const keyPath = path.resolve(__dirname, '.cert/key.pem');
+    const certPath = path.resolve(__dirname, '.cert/cert.pem');
+    const hasCert = fs.existsSync(keyPath) && fs.existsSync(certPath);
+    return {
+      port: 3000,
+      host: '0.0.0.0', // listen on all interfaces so phone on same Wi-Fi can connect
+      open: true,
+      strictPort: false,
+      // HTTPS only when local certs exist (not on Vercel/CI)
+      ...(hasCert && {
+        https: {
+          key: fs.readFileSync(keyPath),
+          cert: fs.readFileSync(certPath),
+        },
+      }),
+      headers: {
+        // Allow Google OAuth popup to call window.close() after sign-in
+        'Cross-Origin-Opener-Policy': 'same-origin-unsafe-allow-popups',
+      },
+    };
+  })(),
   });
