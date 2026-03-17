@@ -807,6 +807,9 @@ export function LiveRecordingViewHighFi() {
     latestMetrics,
     annotatedFrameUrl,
     poseOnlyImageUrl,
+    cameraFacing,
+    setCameraFacing,
+    switchCamera,
     startStreaming,
     stopStreaming,
   } = useLiveCameraWS(undefined, athleteContext);
@@ -871,22 +874,42 @@ export function LiveRecordingViewHighFi() {
               />
             )}
             {isStreaming && (
-              <div className="absolute top-2 right-2 flex gap-1 rounded-lg bg-black/60 p-1">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('full')}
-                  className={`px-2 py-1 text-xs font-medium rounded ${viewMode === 'full' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
-                >
-                  Full
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('pose_only')}
-                  className={`px-2 py-1 text-xs font-medium rounded ${viewMode === 'pose_only' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
-                >
-                  Pose only
-                </button>
-              </div>
+              <>
+                <div className="absolute top-2 right-2 flex gap-1 rounded-lg bg-black/60 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('full')}
+                    className={`px-2 py-1 text-xs font-medium rounded ${viewMode === 'full' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
+                  >
+                    Full
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('pose_only')}
+                    className={`px-2 py-1 text-xs font-medium rounded ${viewMode === 'pose_only' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
+                  >
+                    Pose only
+                  </button>
+                </div>
+                <div className="absolute top-2 left-2 flex gap-1 rounded-lg bg-black/60 p-1">
+                  <button
+                    type="button"
+                    onClick={() => (cameraFacing === 'user' ? undefined : switchCamera())}
+                    className={`px-2 py-1 text-xs font-medium rounded flex items-center gap-1 ${cameraFacing === 'user' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
+                    title="Front camera"
+                  >
+                    <span aria-hidden>📱</span> Front
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => (cameraFacing === 'environment' ? undefined : switchCamera())}
+                    className={`px-2 py-1 text-xs font-medium rounded flex items-center gap-1 ${cameraFacing === 'environment' ? 'bg-white text-gray-900' : 'text-white hover:bg-white/20'}`}
+                    title="Back camera"
+                  >
+                    <span aria-hidden>📷</span> Back
+                  </button>
+                </div>
+              </>
             )}
 
             {isStreaming && (
@@ -918,6 +941,23 @@ export function LiveRecordingViewHighFi() {
                   <div className="w-8 h-8 bg-white rounded" />
                 </div>
                 <p className="text-white text-sm mb-4">Click Start to begin streaming</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-white/80 text-xs">Camera:</span>
+                  <button
+                    type="button"
+                    onClick={() => setCameraFacing('user')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg ${cameraFacing === 'user' ? 'bg-white text-gray-900' : 'bg-white/20 text-white hover:bg-white/30'}`}
+                  >
+                    Front
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraFacing('environment')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg ${cameraFacing === 'environment' ? 'bg-white text-gray-900' : 'bg-white/20 text-white hover:bg-white/30'}`}
+                  >
+                    Back
+                  </button>
+                </div>
                 <button type="button" onClick={startStreaming} className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
                   Start
                 </button>

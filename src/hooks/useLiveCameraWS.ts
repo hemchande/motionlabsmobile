@@ -161,6 +161,23 @@ export function useLiveCameraWS(wsUrlOverride?: string, athleteContext?: { athle
     setPoseOnlyImageUrl(null);
   }, [stopWebcam]);
 
+  const switchCamera = useCallback(async () => {
+    const nextFacing: 'user' | 'environment' = cameraFacing === 'user' ? 'environment' : 'user';
+    try {
+      setError(null);
+      const stream = await getWebcamStream(nextFacing);
+      if (videoRef.current) {
+        const oldStream = videoRef.current.srcObject as MediaStream | null;
+        if (oldStream) oldStream.getTracks().forEach((t) => t.stop());
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraFacing(nextFacing);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to switch camera.');
+    }
+  }, [cameraFacing, getWebcamStream]);
+
   useEffect(() => {
     return () => {
       if (clientRef.current) clientRef.current.disconnect();
@@ -181,6 +198,9 @@ export function useLiveCameraWS(wsUrlOverride?: string, athleteContext?: { athle
     latestMetrics,
     annotatedFrameUrl,
     poseOnlyImageUrl,
+    cameraFacing,
+    setCameraFacing,
+    switchCamera,
     startStreaming,
     stopStreaming,
   };
