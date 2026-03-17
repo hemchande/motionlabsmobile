@@ -78,20 +78,20 @@
         '@': path.resolve(__dirname, './src'),
       },
     },
-    build: {
-      target: 'esnext',
-      outDir: 'build',
-    },
+  build: {
+    target: 'esnext',
+    outDir: 'build',
+  },
+  // Dev server: HTTP by default, HTTPS when .cert/key.pem and .cert/cert.pem exist
   server: (() => {
     const keyPath = path.resolve(__dirname, '.cert/key.pem');
     const certPath = path.resolve(__dirname, '.cert/cert.pem');
     const hasCert = fs.existsSync(keyPath) && fs.existsSync(certPath);
     return {
       port: 3000,
-      host: '0.0.0.0', // listen on all interfaces so phone on same Wi-Fi can connect
+      host: '0.0.0.0', // listen on all interfaces so phone on same Wi‑Fi can connect
       open: true,
       strictPort: false,
-      // HTTPS only when local certs exist (not on Vercel/CI)
       ...(hasCert && {
         https: {
           key: fs.readFileSync(keyPath),
@@ -104,4 +104,4 @@
       },
     };
   })(),
-  });
+});

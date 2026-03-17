@@ -4,7 +4,15 @@
  */
 
 import { getAthleteCoachApiUrl } from '../lib/athleteCoachApiUrl';
-import { createAthleteCoachClient, AthleteCoachFastApiClient } from './athleteCoachFastApiClient';
+import {
+  createAthleteCoachClient,
+  AthleteCoachFastApiClient,
+  type SessionSummary,
+  type SessionSummariesResponse,
+  type AthleteSessionSummariesResponse,
+  type AthleteTrendsResponse,
+  type TrendItem,
+} from './athleteCoachFastApiClient';
 
 /** ALERT_SPEC §2: insight_id → display label mapping */
 export const INSIGHT_LABELS: Record<string, string> = {
@@ -165,6 +173,104 @@ export async function getAllAthletes(params: { limit?: number; include_stats?: b
     include_stats: params.include_stats,
   });
 }
+
+/**
+ * Coach-driven manual athlete creation (no invite/signup flow).
+ * Wraps POST /api/manual-athlete via AthleteCoachFastApiClient.manualCreateAthlete.
+ */
+export async function manualCreateAthlete(params: {
+  full_name: string;
+  email: string;
+  password: string;
+  institution?: string;
+  height?: number;
+  weight?: number;
+  previous_injuries?: string;
+  photo_url?: string;
+}): Promise<Record<string, unknown>> {
+  const client = getClient();
+  return (await client.manualCreateAthlete(params)) as Record<string, unknown>;
+}
+
+/**
+ * Get athlete details (profile). Returns 403 if profile incomplete (no photo).
+ */
+export async function getAthleteDetails(athleteId: string): Promise<Record<string, unknown>> {
+  const client = getClient();
+  return (await client.getAthleteDetails(athleteId)) as Record<string, unknown>;
+}
+
+/**
+ * Get sessions for an athlete.
+ */
+export async function getAthleteSessions(
+  athleteId: string,
+  params: { limit?: number; activity?: string; technique?: string } = {}
+): Promise<{ status?: string; sessions?: unknown[]; [key: string]: unknown }> {
+  const client = getClient();
+  return (await client.getAthleteSessions(athleteId, params)) as { status?: string; sessions?: unknown[]; [key: string]: unknown };
+}
+
+/**
+ * Get insights for an athlete.
+ */
+export async function getAthleteInsights(
+  athleteId: string,
+  params: { limit?: number } = {}
+): Promise<{ status?: string; insights?: unknown[]; [key: string]: unknown }> {
+  const client = getClient();
+  return (await client.getAthleteInsights(athleteId, params)) as { status?: string; insights?: unknown[]; [key: string]: unknown };
+}
+
+/**
+ * GET /api/athlete/{athlete_id}/trends — condensed trends for UI (metric_label, observation, status, coaching_highlights).
+ */
+export async function getAthleteTrends(
+  athleteId: string,
+  params: { activity?: string; technique?: string; limit?: number; full?: boolean } = {}
+): Promise<AthleteTrendsResponse> {
+  const client = getClient();
+  return (await client.getAthleteTrends(athleteId, params)) as AthleteTrendsResponse;
+}
+
+export type { TrendItem };
+
+/**
+ * List all sessions from the API.
+ */
+export async function getAllSessions(params: {
+  limit?: number;
+  activity?: string;
+  athlete_id?: string;
+} = {}): Promise<{ status?: string; sessions?: unknown[]; [key: string]: unknown }> {
+  const client = getClient();
+  return (await client.getAllSessions(params)) as { status?: string; sessions?: unknown[]; [key: string]: unknown };
+}
+
+/**
+ * GET /api/session-summaries — high-level summaries with issues_summary, metrics_summary, cloudflare_stream_url.
+ */
+export async function getSessionSummaries(params: {
+  limit?: number;
+  activity?: string;
+  athlete_id?: string;
+} = {}): Promise<SessionSummariesResponse> {
+  const client = getClient();
+  return (await client.getSessionSummaries(params)) as SessionSummariesResponse;
+}
+
+/**
+ * GET /api/athlete/{athlete_id}/session-summaries — session summaries for one athlete (for profile).
+ */
+export async function getAthleteSessionSummaries(
+  athleteId: string,
+  params: { limit?: number; activity?: string; technique?: string } = {}
+): Promise<AthleteSessionSummariesResponse> {
+  const client = getClient();
+  return (await client.getAthleteSessionSummaries(athleteId, params)) as AthleteSessionSummariesResponse;
+}
+
+export type { SessionSummary };
 
 /**
  * List alerts for an athlete (ALERT_SPEC §4.1).
@@ -521,6 +627,18 @@ export async function startAgent(params: {
 }): Promise<Record<string, unknown>> {
   const client = getClient();
   return (await client.startAgent(params)) as Record<string, unknown>;
+}
+
+/**
+ * Upload a photo file for an athlete (POST /api/athlete/add-photo-upload). Use after manual create to attach a profile photo.
+ */
+export async function addPhotoUploadToAthlete(params: {
+  athlete_id: string;
+  photo: File;
+  athlete_name?: string;
+}): Promise<Record<string, unknown>> {
+  const client = getClient();
+  return (await client.addPhotoUpload(params)) as Record<string, unknown>;
 }
 
 export { createAthleteCoachClient, AthleteCoachFastApiClient, createAthleteWithPhotoFormData } from './athleteCoachFastApiClient';

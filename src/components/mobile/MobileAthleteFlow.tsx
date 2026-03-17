@@ -56,7 +56,12 @@ export function MobileAthleteFlow({ currentScreen, onNavigate }: { currentScreen
     <MobileAthleteLogin key="login" onNavigate={wrappedOnNavigate} />,
     <MobileAthleteHome key="home" onNavigate={wrappedOnNavigate} />,
     <MobileAthleteHome key="home2" onNavigate={wrappedOnNavigate} />,
-    <MobileRecordVideo key="record" onNavigate={wrappedOnNavigate} />,
+    <MobileRecordVideo
+      key="record"
+      onNavigate={wrappedOnNavigate}
+      athleteId={athleteId ?? undefined}
+      athleteName={user?.fullName ?? undefined}
+    />,
     <MobileLiveRecording key="live" onNavigate={wrappedOnNavigate} />,
     <MobileAlertsList
       key="alerts"

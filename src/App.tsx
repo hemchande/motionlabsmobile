@@ -3,6 +3,7 @@ import { MobileApp } from './components/MobileApp';
 import { PhoneTestBanner } from './components/PhoneTestBanner';
 import { FirebaseAuthProvider } from './contexts/FirebaseAuthContext';
 import { UserProvider } from './contexts/UserContext';
+import { CoachPreferencesProvider } from './contexts/CoachPreferencesContext';
 import { AlertDashboard } from './components/AlertDashboard';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -16,7 +17,8 @@ export default function App() {
       return (
         <FirebaseAuthProvider>
           <UserProvider>
-            <PhoneTestBanner />
+            <CoachPreferencesProvider>
+              <PhoneTestBanner />
             <div className="relative">
               <button
                 onClick={() => setShowMCPTest(!showMCPTest)}
@@ -32,6 +34,7 @@ export default function App() {
                 <MobileApp />
               )}
             </div>
+            </CoachPreferencesProvider>
           </UserProvider>
         </FirebaseAuthProvider>
       );
@@ -41,8 +44,10 @@ export default function App() {
   return (
     <FirebaseAuthProvider>
       <UserProvider>
-        <PhoneTestBanner />
-        <MobileApp />
+        <CoachPreferencesProvider>
+          <PhoneTestBanner />
+          <MobileApp />
+        </CoachPreferencesProvider>
       </UserProvider>
     </FirebaseAuthProvider>
   );

@@ -1,12 +1,11 @@
 import { ReactNode } from 'react';
 import { AlertTriangle, Info, CheckCircle, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
-// Wireframe Screen with Annotations
-export function WireframeScreen({ 
-  children, 
-  annotations 
-}: { 
-  children: ReactNode; 
+// Wireframe Screen (screen notes / annotations removed)
+export function WireframeScreen({
+  children,
+}: {
+  children: ReactNode;
   annotations?: {
     purpose: string;
     kpis: string[];
@@ -18,34 +17,6 @@ export function WireframeScreen({
       <div className="bg-white border-2 border-gray-300 rounded-lg min-h-[600px]">
         {children}
       </div>
-      
-      {annotations && (
-        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
-          <p className="text-sm text-gray-900 mb-2"><strong>📝 Screen Notes:</strong></p>
-          <div className="grid grid-cols-3 gap-4 text-xs">
-            <div>
-              <p className="text-gray-700 mb-1"><strong>Purpose:</strong></p>
-              <p className="text-gray-600">{annotations.purpose}</p>
-            </div>
-            <div>
-              <p className="text-gray-700 mb-1"><strong>KPIs to Track:</strong></p>
-              <ul className="text-gray-600 space-y-0.5">
-                {annotations.kpis.map((kpi, i) => (
-                  <li key={i}>• {kpi}</li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <p className="text-gray-700 mb-1"><strong>Data Dependencies:</strong></p>
-              <ul className="text-gray-600 space-y-0.5">
-                {annotations.dependencies.map((dep, i) => (
-                  <li key={i}>• {dep}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

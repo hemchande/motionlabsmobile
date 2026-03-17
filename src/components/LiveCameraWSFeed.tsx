@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Video, Square, Play, AlertCircle, Activity, Users } from 'lucide-react';
+import { Camera, Video, Square, Play, AlertCircle, Activity, Users, User } from 'lucide-react';
 import { LiveCameraWSClient, type FrameData, type MetricsData, type AthleteData } from '../services/liveCameraWSClient';
+import { LiveCameraMetricsCards } from './LiveCameraMetricsCards';
 import { getAthleteCoachApiUrl } from '../lib/athleteCoachApiUrl';
 
 interface LiveCameraWSFeedProps {
@@ -12,6 +13,10 @@ interface LiveCameraWSFeedProps {
   showMetrics?: boolean;
   /** Show athlete detection info */
   showAthleteInfo?: boolean;
+  /** When set, appended to WS URL so backend tags session with this athlete (coach selected or logged-in athlete) */
+  athleteId?: string | null;
+  /** When set, appended to WS URL with athleteId for segment labelling */
+  athleteName?: string | null;
 }
 
 /**
@@ -23,6 +28,8 @@ export function LiveCameraWSFeed({
   wsUrl,
   showMetrics = true,
   showAthleteInfo = true,
+  athleteId,
+  athleteName,
 }: LiveCameraWSFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const annotatedImgRef = useRef<HTMLImageElement>(null);
@@ -39,31 +46,53 @@ export function LiveCameraWSFeed({
   const [currentAthlete, setCurrentAthlete] = useState<AthleteData | null>(null);
   const [latestMetrics, setLatestMetrics] = useState<MetricsData | null>(null);
   const [annotatedFrameUrl, setAnnotatedFrameUrl] = useState<string | null>(null);
+  /** 'user' = front-facing, 'environment' = back-facing (phone) */
+  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
 
-  // TEMPORARY: WebSocket URL by page protocol (see WebSocket Connection Guide)
-  // HTTPS → always Cloud Run wss (env/prop ws:// blocked by browser). HTTP → env or local ws.
+  // WebSocket URL: prop > env (VITE_LIVE_CAMERA_WS_URL) > default by protocol.
+  // When athleteId/athleteName are set, append query params so backend tags session (same as coach web app).
   const getWSUrl = useCallback(() => {
-    if (wsUrl) return wsUrl;
-    if (window.location.protocol === 'https:') {
-      const url = 'wss://live-camera-gpu-630016859450.europe-west1.run.app/api/live-camera/ws';
-      console.log('🔒 HTTPS: using Cloud Run WSS (GPU)', url);
-      return url;
+    const baseUrl = (() => {
+      if (wsUrl) return wsUrl;
+      const env = (import.meta as unknown as { env?: { VITE_LIVE_CAMERA_WS_URL?: string } }).env?.VITE_LIVE_CAMERA_WS_URL;
+      const trimmed = env?.trim();
+      if (trimmed) {
+        if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
+        return trimmed;
+      }
+      if (window.location.protocol === 'https:') {
+        return 'https://live-camera-gpu-630016859450.europe-west1.run.app';
+      }
+      return 'http://localhost:8010';
+    })();
+    const httpBase = baseUrl.startsWith('ws')
+      ? baseUrl.replace(/^ws(s?):\/\//, 'http$1://').replace(/\/api\/live-camera\/ws.*$/, '').replace(/\/$/, '')
+      : baseUrl;
+    const athleteContext = (athleteId || athleteName) ? { athlete_id: athleteId ?? undefined, athlete_name: athleteName ?? undefined } : undefined;
+    if (athleteContext?.athlete_id || athleteContext?.athlete_name) {
+      return LiveCameraWSClient.getWebSocketUrl(httpBase, athleteContext);
     }
-    const env = (import.meta as unknown as { env?: { VITE_LIVE_CAMERA_WS_URL?: string } }).env?.VITE_LIVE_CAMERA_WS_URL;
-    const url = env || 'ws://localhost:8010/api/live-camera/ws';
-    console.log('📡 HTTP: using WebSocket', url);
-    return url;
-  }, [wsUrl]);
+    if (baseUrl.startsWith('ws://') || baseUrl.startsWith('wss://')) return baseUrl;
+    return LiveCameraWSClient.getWebSocketUrl(httpBase);
+  }, [wsUrl, athleteId, athleteName]);
 
-  // Start webcam
-  const startWebcam = useCallback(async () => {
+  // Get a webcam stream with the given facing mode (for start or switch)
+  const getWebcamStream = useCallback(async (facing: 'user' | 'environment') => {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia is not supported.');
+    return navigator.mediaDevices.getUserMedia({
+      video: { width: 1280, height: 720, facingMode: facing },
+      audio: false,
+    });
+  }, []);
+
+  // Start webcam with current (or explicit) facing mode
+  const startWebcam = useCallback(async (facing?: 'user' | 'environment') => {
+    const mode = facing ?? cameraFacing;
     try {
-      // Check if getUserMedia is available (requires HTTPS or localhost)
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         const protocol = window.location.protocol;
         const hostname = window.location.hostname;
         const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
-        
         if (protocol === 'http:' && !isLocalhost) {
           throw new Error(
             `Camera access requires HTTPS or localhost. Current URL: ${protocol}//${hostname}\n\n` +
@@ -71,16 +100,10 @@ export function LiveCameraWSFeed({
             `1. Access via http://localhost:3000 (if on same machine)\n` +
             `2. Enable HTTPS in vite.config.ts (requires WSS support on backend)`
           );
-        } else {
-          throw new Error('getUserMedia is not supported by this browser.');
         }
+        throw new Error('getUserMedia is not supported by this browser.');
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720, facingMode: 'user' },
-        audio: false,
-      });
-
+      const stream = await getWebcamStream(mode);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
@@ -90,7 +113,7 @@ export function LiveCameraWSFeed({
       const errorMessage = err instanceof Error ? err.message : 'Camera access denied or unavailable.';
       setError(errorMessage);
     }
-  }, []);
+  }, [cameraFacing, getWebcamStream]);
 
   // Stop webcam
   const stopWebcam = useCallback(() => {
@@ -100,6 +123,24 @@ export function LiveCameraWSFeed({
       videoRef.current.srcObject = null;
     }
   }, []);
+
+  // Switch between front and back camera (only while streaming; otherwise just set preference for next start)
+  const switchCamera = useCallback(async () => {
+    const next = cameraFacing === 'user' ? 'environment' : 'user';
+    setCameraFacing(next);
+    if (!isStreaming || !videoRef.current) return;
+    try {
+      stopWebcam();
+      const stream = await getWebcamStream(next);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+    } catch (err) {
+      console.error('Failed to switch camera:', err);
+      setError(err instanceof Error ? err.message : 'Could not switch camera.');
+    }
+  }, [cameraFacing, isStreaming, stopWebcam, getWebcamStream]);
 
   // Connect to WebSocket and start streaming
   const startStreaming = useCallback(async () => {
@@ -224,7 +265,32 @@ export function LiveCameraWSFeed({
           <Activity className="w-5 h-5 text-blue-600" />
           <h3 className="text-lg font-semibold text-gray-900">Live Camera (WebSocket)</h3>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Front / Back camera (phone-friendly) */}
+          <div className="flex rounded-xl border border-gray-200 overflow-hidden bg-gray-100 min-h-[44px]">
+            <button
+              type="button"
+              onClick={() => !isStreaming ? setCameraFacing('user') : (cameraFacing !== 'user' && switchCamera())}
+              className={`px-3 py-2 text-sm font-medium flex items-center gap-1.5 min-h-[44px] ${
+                cameraFacing === 'user' ? 'bg-white text-blue-600 shadow-sm border border-gray-200' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+              title="Front camera"
+            >
+              <User className="w-4 h-4" />
+              Front
+            </button>
+            <button
+              type="button"
+              onClick={() => !isStreaming ? setCameraFacing('environment') : (cameraFacing !== 'environment' && switchCamera())}
+              className={`px-3 py-2 text-sm font-medium flex items-center gap-1.5 min-h-[44px] ${
+                cameraFacing === 'environment' ? 'bg-white text-blue-600 shadow-sm border border-gray-200' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+              title="Back camera"
+            >
+              <Camera className="w-4 h-4" />
+              Back
+            </button>
+          </div>
           {isConnected && (
             <div className="flex items-center gap-1.5 px-2 py-1 bg-green-50 text-green-700 text-xs rounded-full">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -261,8 +327,8 @@ export function LiveCameraWSFeed({
         </div>
       )}
 
-      {/* Video/Annotated Frame Container - large player (min height + viewport-based max) */}
-      <div className="relative bg-black rounded-xl overflow-hidden aspect-video min-h-[420px] sm:min-h-[480px] max-h-[70vh] w-full">
+      {/* Video/Annotated Frame Container - large player for WebSocket feed (min height + viewport-based max) */}
+      <div className="relative bg-black rounded-xl overflow-hidden aspect-video min-h-[520px] sm:min-h-[600px] max-h-[90vh] w-full">
         {/* Hidden video element (source for WebSocket stream) */}
         <video
           ref={videoRef}
@@ -320,33 +386,11 @@ export function LiveCameraWSFeed({
         )}
       </div>
 
-      {/* Metrics Panel */}
+      {/* Real-time metrics from live camera service: WebSocket → client emits "metrics" → latestMetrics → LiveCameraMetricsCards (ACL risk, form issues, recommendations) */}
       {showMetrics && latestMetrics && (
         <div className="mt-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-900 mb-2">Real-Time Metrics</h4>
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(latestMetrics.metrics).slice(0, 4).map(([key, value]) => (
-              <div key={key} className="p-2 bg-white rounded border border-gray-200">
-                <p className="text-xs text-gray-500 mb-1">{key.replace(/_/g, ' ')}</p>
-                <p className="text-lg font-semibold text-gray-900">{String(value)}</p>
-              </div>
-            ))}
-          </div>
-          {latestMetrics.phase && (
-            <p className="mt-2 text-xs text-gray-600">
-              Phase: <span className="font-medium">{latestMetrics.phase}</span>
-            </p>
-          )}
-          {latestMetrics.formIssues && latestMetrics.formIssues.length > 0 && (
-            <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded">
-              <p className="text-xs font-medium text-amber-900 mb-1">Form Issues:</p>
-              <ul className="text-xs text-amber-800 space-y-0.5">
-                {latestMetrics.formIssues.map((issue, i) => (
-                  <li key={i}>• {issue}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <h4 className="text-sm font-semibold text-gray-900 mb-3">Real-Time Metrics</h4>
+          <LiveCameraMetricsCards metrics={latestMetrics} maxMetricCards={6} />
         </div>
       )}
 

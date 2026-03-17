@@ -378,11 +378,11 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
                 lastLogin: serverTimestamp(),
               });
 
-              // Upload photo to backend from the full profile completion screen (single place).
+              // Upload photo and call add-photo so embedding is stored in local index.
               const existingAthleteId = existingData.athleteId as string | undefined;
               if (data.role === 'athlete' && existingAthleteId && data.photoFile) {
+                const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
                 try {
-                  const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
                   await apiClient.addPhotoUpload({
                     athlete_id: existingAthleteId,
                     photo: data.photoFile,
@@ -391,6 +391,19 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
                   console.log('✅ Profile photo uploaded to backend (add-photo-upload)');
                 } catch (photoError) {
                   console.warn('⚠️ Failed to upload profile photo to backend:', photoError);
+                }
+                try {
+                  const photoRef = ref(storage, `profile_photos/${fbUser.uid}/${Date.now()}.jpg`);
+                  await uploadBytes(photoRef, data.photoFile);
+                  const photoUrl = await getDownloadURL(photoRef);
+                  await apiClient.addUserPhoto({
+                    athlete_id: existingAthleteId,
+                    photo_url: photoUrl,
+                    athlete_name: fullName,
+                  });
+                  console.log('✅ add-photo called so embedding can be stored in local index');
+                } catch (addPhotoErr) {
+                  console.warn('⚠️ add-photo (embedding) failed:', addPhotoErr);
                 }
               }
               
@@ -451,10 +464,10 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
 
       await setDoc(doc(db, 'users', fbUser.uid), userDoc);
 
-      // Upload profile photo to backend (this is the ONLY photo upload path we keep).
+      // Upload profile photo and call add-photo so embedding is stored in local index (invited athletes).
       if (data.role === 'athlete' && athleteId && data.photoFile) {
+        const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
         try {
-          const apiClient = createAthleteCoachClient(getAthleteCoachApiUrl());
           await apiClient.addPhotoUpload({
             athlete_id: athleteId,
             photo: data.photoFile,
@@ -463,6 +476,19 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
           console.log('✅ Profile photo uploaded to backend (add-photo-upload)');
         } catch (photoError) {
           console.warn('⚠️ Failed to upload profile photo to backend:', photoError);
+        }
+        try {
+          const photoRef = ref(storage, `profile_photos/${fbUser.uid}/${Date.now()}.jpg`);
+          await uploadBytes(photoRef, data.photoFile);
+          const photoUrl = await getDownloadURL(photoRef);
+          await apiClient.addUserPhoto({
+            athlete_id: athleteId,
+            photo_url: photoUrl,
+            athlete_name: fullName,
+          });
+          console.log('✅ add-photo called so embedding can be stored in local index');
+        } catch (addPhotoErr) {
+          console.warn('⚠️ add-photo (embedding) failed:', addPhotoErr);
         }
       }
 
@@ -738,6 +764,21 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  useEffect(() => {
+    const authContextSnapshot = {
+      isAuthenticated,
+      loading,
+      userRole,
+      user: user ? { id: user.id, email: user.email, fullName: user.fullName, role: user.role, institution: user.institution, athleteId: user.athleteId } : null,
+      firebaseUser: firebaseUser ? { uid: firebaseUser.uid, email: firebaseUser.email, displayName: (firebaseUser as { displayName?: string }).displayName } : null,
+      needsProfileCompletion,
+      needsPhotoCompletion,
+      firebaseUserPendingProfile: !!firebaseUserPendingProfile,
+      coachIdForInvite: user?.id ?? firebaseUser?.uid ?? '(none)',
+    };
+    console.log('[FirebaseAuthContext] user auth context:', authContextSnapshot);
+  }, [isAuthenticated, loading, userRole, user, firebaseUser, firebaseUserPendingProfile, needsProfileCompletion, needsPhotoCompletion]);
+
   if (!mounted) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -747,22 +788,22 @@ export function FirebaseAuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ 
-      isAuthenticated, 
-      user, 
+    <AuthContext.Provider value={{
+      isAuthenticated,
+      user,
       firebaseUser,
       needsProfileCompletion,
       needsPhotoCompletion,
       firebaseUserPendingProfile,
       completeProfile,
       clearPhotoCompletion,
-      userRole, 
-      login, 
-      signup, 
-      logout, 
+      userRole,
+      login,
+      signup,
+      logout,
       sendEmailVerification,
       sendPasswordReset,
-      loading 
+      loading
     }}>
       {children}
     </AuthContext.Provider>

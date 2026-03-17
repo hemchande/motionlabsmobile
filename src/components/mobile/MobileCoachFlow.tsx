@@ -121,7 +121,13 @@ export function MobileCoachFlow({
     ) : (
       <MobileAthleteProfile key="profile" onNavigate={wrappedOnNavigate} />
     ),
-    <MobileRecordVideo key="record" onStartLiveSession={handleStartLiveSession} onNavigate={wrappedOnNavigate} />,
+    <MobileRecordVideo
+      key="record"
+      onStartLiveSession={handleStartLiveSession}
+      onNavigate={wrappedOnNavigate}
+      athleteId={selectedAthlete?.athlete_id ?? rosterAthletes[0]?.athlete_id}
+      athleteName={selectedAthlete?.athlete_name ?? rosterAthletes[0]?.athlete_name}
+    />,
     <MobileLiveRecording key="live" onNavigate={wrappedOnNavigate} />,
     <MobileAlertsList key="alert" onNavigate={wrappedOnNavigate} />,
     <MobileQuickActions key="actions" onStartLiveSession={handleStartLiveSession} onNavigate={wrappedOnNavigate} />

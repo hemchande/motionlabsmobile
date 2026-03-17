@@ -84,13 +84,13 @@ export function GoogleProfileCompletion({ onComplete }: GoogleProfileCompletionP
     return null;
   }
 
-  const displayName = firebaseUserPendingProfile.displayName || firebaseUserPendingProfile.email?.split('@')[0] || 'there';
+  const displayLabel = firebaseUserPendingProfile.email || firebaseUserPendingProfile.displayName || 'there';
 
   return (
     <div className="min-h-full bg-gray-50 flex flex-col p-6 overflow-y-auto">
       <div className="mb-6">
         <h1 className="text-xl font-bold text-gray-900">Complete your profile</h1>
-        <p className="text-gray-600 mt-1">Hi {displayName}! Add a few details to get started.</p>
+        <p className="text-gray-600 mt-1">Hi {displayLabel}! Add a few details to get started.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col gap-4">

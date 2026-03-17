@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   WireframeScreen,
   TopNavEnhanced,
@@ -15,7 +15,7 @@ import {
   ButtonEnhanced,
   FormFieldEnhanced,
 } from './EnhancedComponents';
-import { Upload, Plus, Play, Settings, Download, Bell, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react';
+import { Upload, Plus, Play, Settings, Download, Bell, ChevronLeft, ChevronRight, Loader2, AlertCircle, Image } from 'lucide-react';
 import { 
   RecordUploadVideoEnhanced,
   LiveRecordingViewHighFi,
@@ -24,8 +24,25 @@ import {
 } from './CoachFlowEnhancedPart2';
 import { TeamDashboardEnhanced, SettingsRosterAdminEnhanced } from './CoachFlowEnhancedPart3';
 import { useAuth } from '../contexts/FirebaseAuthContext';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { useCoachWebApp } from '../contexts/CoachWebAppContext';
+import {
+  getAthleteDetails,
+  getAthleteSessions,
+  getAthleteAlerts,
+  getAthleteTrends,
+  getAthleteSessionSummaries,
+  getBaselinesForAthlete,
+  getInsightDisplayLabel,
+  manualCreateAthlete,
+  addPhotoUploadToAthlete,
+  type SessionSummary,
+} from '../services/athleteCoachService';
+import type { AthleteTrendsResponse } from '../services/athleteCoachFastApiClient';
+import { AthleteTrendsCards } from './AthleteTrendsCards';
+import { SessionSummaryCards } from './SessionSummaryCards';
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { BrevoService } from '../services/brevo';
 
 export function CoachFlowEnhanced({ currentScreen }: { currentScreen: number }) {
   const screens = [
@@ -587,8 +604,189 @@ function TeamOnboardingScheduleEnhanced() {
   );
 }
 
-// Screen 4: Athlete Roster List (HIGHER FIDELITY)
+// Screen 4: Athlete Roster List (wired to API + Firestore via CoachWebAppContext, Brevo invite)
 function AthleteRosterListEnhanced() {
+  const ctx = useCoachWebApp();
+  const { user, firebaseUser } = useAuth();
+  const roster = ctx?.roster ?? [];
+  const loading = ctx?.rosterLoading ?? false;
+  const alertCount = (ctx?.alerts ?? []).length;
+  const alertLevel = roster.filter((a) => a.status === 'alert').length;
+  const monitoring = roster.filter((a) => a.status === 'monitor').length;
+  const allClear = roster.filter((a) => a.status !== 'alert' && a.status !== 'monitor').length;
+
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [athleteEmail, setAthleteEmail] = useState('');
+  const [athleteName, setAthleteName] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState(false);
+
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    fullName: '',
+    email: '',
+    password: '',
+    institution: '',
+    height: '',
+    weight: '',
+    previousInjuries: '',
+  });
+  const [manualPhotoFile, setManualPhotoFile] = useState<File | null>(null);
+  const manualPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [manualSuccess, setManualSuccess] = useState(false);
+
+  const handleSelectAthlete = (athleteId: string) => {
+    ctx?.setSelectedAthleteId(athleteId);
+    ctx?.setWebScreen?.(4); // Athlete Profile
+  };
+
+  const handleManualChange = (field: keyof typeof manualForm, value: string) => {
+    setManualForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleManualCreate = async () => {
+    setManualError(null);
+    setManualSuccess(false);
+    if (!manualForm.fullName.trim() || !manualForm.email.trim() || !manualForm.password.trim()) {
+      setManualError('Full name, email, and password are required.');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(manualForm.email.trim())) {
+      setManualError('Please enter a valid email address.');
+      return;
+    }
+    let heightNum: number | undefined;
+    let weightNum: number | undefined;
+    if (manualForm.height.trim()) {
+      const h = Number(manualForm.height.trim());
+      if (!Number.isFinite(h) || h <= 0) {
+        setManualError('Height must be a positive number (cm).');
+        return;
+      }
+      heightNum = h;
+    }
+    if (manualForm.weight.trim()) {
+      const w = Number(manualForm.weight.trim());
+      if (!Number.isFinite(w) || w <= 0) {
+        setManualError('Weight must be a positive number (kg).');
+        return;
+      }
+      weightNum = w;
+    }
+    setManualLoading(true);
+    try {
+      const result = await manualCreateAthlete({
+        full_name: manualForm.fullName.trim(),
+        email: manualForm.email.trim(),
+        password: manualForm.password.trim(),
+        institution: manualForm.institution.trim() || undefined,
+        height: heightNum,
+        weight: weightNum,
+        previous_injuries: manualForm.previousInjuries.trim() || undefined,
+      }) as { athlete_id?: string; status?: string; [key: string]: unknown };
+      const athleteId = result?.athlete_id;
+      if (manualPhotoFile && athleteId) {
+        await addPhotoUploadToAthlete({
+          athlete_id: athleteId,
+          photo: manualPhotoFile,
+          athlete_name: manualForm.fullName.trim() || undefined,
+        });
+      }
+      setManualSuccess(true);
+      setManualForm({
+        fullName: '',
+        email: '',
+        password: '',
+        institution: '',
+        height: '',
+        weight: '',
+        previousInjuries: '',
+      });
+      setManualPhotoFile(null);
+      if (manualPhotoInputRef.current) manualPhotoInputRef.current.value = '';
+      await ctx?.refreshRoster?.();
+      setTimeout(() => {
+        setShowManualModal(false);
+        setManualSuccess(false);
+      }, 1500);
+    } catch (err) {
+      console.error('Error creating manual athlete:', err);
+      setManualError(err instanceof Error ? err.message : 'Failed to create athlete. Check backend /api/manual-athlete.');
+    } finally {
+      setManualLoading(false);
+    }
+  };
+
+  const handleSendInvite = async () => {
+    if (!athleteEmail.trim()) {
+      setInviteError('Please enter an athlete email address');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(athleteEmail.trim())) {
+      setInviteError('Please enter a valid email address');
+      return;
+    }
+    const coachId = firebaseUser?.uid ?? (user as { id?: string })?.id ?? ctx?.coachId;
+    if (!coachId) {
+      setInviteError('User information not available. Please sign out and sign in again.');
+      return;
+    }
+    setInviteLoading(true);
+    setInviteError(null);
+    setInviteSuccess(false);
+    try {
+      const invitationToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      const baseUrl = window.location.origin;
+      const invitationLink = `${baseUrl}/?invite=${invitationToken}&mode=signup`;
+      const coachName = user?.fullName ?? (firebaseUser as { displayName?: string })?.displayName ?? 'Coach';
+      const coachEmail = user?.email ?? (firebaseUser as { email?: string })?.email ?? '';
+      const emailTrimmed = athleteEmail.trim();
+      await addDoc(collection(db, 'invitations'), {
+        invitationToken,
+        athleteEmail: emailTrimmed,
+        athleteEmailLower: emailTrimmed.toLowerCase(),
+        athleteName: athleteName.trim() || null,
+        coachId,
+        coachName,
+        coachEmail,
+        institution: user?.institution ?? null,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+      });
+      const result = await BrevoService.sendAthleteInvitation({
+        coachName,
+        coachEmail,
+        athleteEmail: emailTrimmed,
+        athleteName: athleteName.trim() || undefined,
+        institution: user?.institution ?? undefined,
+        invitationLink,
+      });
+      if (result.success) {
+        setInviteError(null);
+        setInviteSuccess(true);
+        setAthleteEmail('');
+        setAthleteName('');
+        ctx?.refreshRoster?.();
+        setTimeout(() => {
+          setShowInviteModal(false);
+          setInviteSuccess(false);
+        }, 2000);
+      } else {
+        setInviteError(result.error ?? 'Failed to send invitation. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error sending invitation:', err);
+      setInviteError(err instanceof Error ? err.message : 'An error occurred. Please try again.');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
   return (
     <WireframeScreen
       annotations={{
@@ -597,6 +795,219 @@ function AthleteRosterListEnhanced() {
         dependencies: ['Athlete roster DB', 'Real-time status updates', 'Alert aggregation']
       }}
     >
+      {/* Invite modal (Brevo + Firestore) */}
+      {showInviteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !inviteLoading && setShowInviteModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border-2 border-gray-200" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Invite Athlete</h3>
+            <p className="text-sm text-gray-600 mb-4">An email will be sent via Brevo with a sign-up link. The athlete will be added to your roster when they accept.</p>
+            {inviteError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <p className="text-sm text-red-800">{inviteError}</p>
+              </div>
+            )}
+            {inviteSuccess && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                Invitation email sent. Check your Brevo dashboard if needed. The athlete can sign up via the link in the email.
+              </div>
+            )}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Athlete email *</label>
+                <input
+                  type="email"
+                  value={athleteEmail}
+                  onChange={(e) => setAthleteEmail(e.target.value)}
+                  placeholder="athlete@example.com"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={inviteLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Athlete name (optional)</label>
+                <input
+                  type="text"
+                  value={athleteName}
+                  onChange={(e) => setAthleteName(e.target.value)}
+                  placeholder="Full name"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={inviteLoading}
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <ButtonEnhanced variant="outline" size="medium" onClick={() => !inviteLoading && setShowInviteModal(false)}>
+                Cancel
+              </ButtonEnhanced>
+              <ButtonEnhanced variant="primary" size="medium" onClick={handleSendInvite}>
+                {inviteLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 inline mr-2 animate-spin" />
+                    Sending…
+                  </>
+                ) : (
+                  'Send invitation'
+                )}
+              </ButtonEnhanced>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual athlete creation modal (no invite, uses /api/manual-athlete) */}
+      {showManualModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+          onClick={() => !manualLoading && setShowManualModal(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 border-2 border-gray-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Add Athlete (manual)</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Create an athlete directly without sending an invite. You can set profile details now; the athlete can log in later with the password you choose.
+            </p>
+            {manualError && (
+              <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <p className="text-sm text-red-800">{manualError}</p>
+              </div>
+            )}
+            {manualSuccess && (
+              <div className="mb-3 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                Athlete created successfully. They now appear in your roster.
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Full name <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={manualForm.fullName}
+                  onChange={(e) => handleManualChange('fullName', e.target.value)}
+                  placeholder="Maya Lauzon"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={manualForm.email}
+                  onChange={(e) => handleManualChange('email', e.target.value)}
+                  placeholder="maya@example.com"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Password <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={manualForm.password}
+                  onChange={(e) => handleManualChange('password', e.target.value)}
+                  placeholder="temp-password-123"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Institution</label>
+                <input
+                  type="text"
+                  value={manualForm.institution}
+                  onChange={(e) => handleManualChange('institution', e.target.value)}
+                  placeholder={user?.institution ?? 'UC Berkeley'}
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Height (cm)</label>
+                <input
+                  type="number"
+                  value={manualForm.height}
+                  onChange={(e) => handleManualChange('height', e.target.value)}
+                  placeholder="160"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+                <input
+                  type="number"
+                  value={manualForm.weight}
+                  onChange={(e) => handleManualChange('weight', e.target.value)}
+                  placeholder="50"
+                  className="w-full h-10 border-2 border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Previous injuries</label>
+                <textarea
+                  value={manualForm.previousInjuries}
+                  onChange={(e) => handleManualChange('previousInjuries', e.target.value)}
+                  placeholder="Left ACL reconstruction 2020, ankle sprain 2022"
+                  className="w-full h-20 border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={manualLoading}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Profile photo (optional)</label>
+                <input
+                  ref={manualPhotoInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  onChange={(e) => setManualPhotoFile(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
+                  disabled={manualLoading}
+                />
+                {manualPhotoFile && (
+                  <p className="mt-1 text-xs text-gray-500 flex items-center gap-1">
+                    <Image className="w-3.5 h-3.5" />
+                    {manualPhotoFile.name}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4 justify-end">
+              <ButtonEnhanced
+                variant="outline"
+                size="medium"
+                onClick={() => !manualLoading && setShowManualModal(false)}
+              >
+                Cancel
+              </ButtonEnhanced>
+              <ButtonEnhanced
+                variant="primary"
+                size="medium"
+                onClick={handleManualCreate}
+              >
+                {manualLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 inline mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Create athlete'
+                )}
+              </ButtonEnhanced>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TopNavEnhanced 
         title="Team Roster" 
         role="Head Coach"
@@ -605,12 +1016,17 @@ function AthleteRosterListEnhanced() {
           <>
             <button className="p-2 rounded-lg hover:bg-gray-100 relative">
               <Bell className="w-5 h-5 text-gray-600" />
-              <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+              {alertCount > 0 && (
+                <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+              )}
             </button>
-            <ButtonEnhanced variant="outline" size="small">
-              <Plus className="w-4 h-4 inline mr-1" /> Add Athlete
+            <ButtonEnhanced variant="outline" size="small" onClick={() => ctx && setShowInviteModal(true)}>
+              <Plus className="w-4 h-4 inline mr-1" /> Invite Athlete
             </ButtonEnhanced>
-            <ButtonEnhanced variant="outline" size="small">
+            <ButtonEnhanced variant="primary" size="small" onClick={() => ctx && setShowManualModal(true)}>
+              <Plus className="w-4 h-4 inline mr-1" /> Add Manual
+            </ButtonEnhanced>
+            <ButtonEnhanced variant="outline" size="small" onClick={() => ctx?.setWebScreen?.(10)}>
               <Settings className="w-4 h-4" />
             </ButtonEnhanced>
           </>
@@ -618,23 +1034,23 @@ function AthleteRosterListEnhanced() {
       />
       
       <div className="p-6">
-        {/* Header with Stats */}
+        {/* Header with Stats (from API) */}
         <div className="grid grid-cols-4 gap-4 mb-6">
           <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
             <p className="text-gray-500 text-sm mb-1">Total Athletes</p>
-            <p className="text-3xl text-gray-900">12</p>
+            <p className="text-3xl text-gray-900">{loading ? '—' : roster.length}</p>
           </div>
           <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
             <p className="text-red-700 text-sm mb-1">Alert Level</p>
-            <p className="text-3xl text-red-700">2</p>
+            <p className="text-3xl text-red-700">{loading ? '—' : alertLevel}</p>
           </div>
           <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
             <p className="text-yellow-700 text-sm mb-1">Monitoring</p>
-            <p className="text-3xl text-yellow-700">3</p>
+            <p className="text-3xl text-yellow-700">{loading ? '—' : monitoring}</p>
           </div>
           <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
             <p className="text-green-700 text-sm mb-1">All Clear</p>
-            <p className="text-3xl text-green-700">7</p>
+            <p className="text-3xl text-green-700">{loading ? '—' : allClear}</p>
           </div>
         </div>
 
@@ -650,9 +1066,6 @@ function AthleteRosterListEnhanced() {
             <button className="px-4 py-2 border-2 border-gray-300 rounded-lg text-sm text-gray-700 hover:border-gray-400">
               Monitoring
             </button>
-            <button className="px-4 py-2 border-2 border-gray-300 rounded-lg text-sm text-gray-700 hover:border-gray-400">
-              Injury Flag
-            </button>
           </div>
           <div className="flex gap-2">
             <div className="w-64 h-10 border-2 border-gray-300 rounded-lg bg-white flex items-center px-3">
@@ -661,251 +1074,261 @@ function AthleteRosterListEnhanced() {
           </div>
         </div>
 
-        {/* Athlete Cards Grid */}
-        <div className="grid grid-cols-3 gap-4">
-          <AthleteCardEnhanced 
-            name="Sarah Johnson" 
-            age="16" 
-            school="Central HS"
-            status="alert"
-            injuryFlag={false}
-            quickMetric="Knee valgus: ↑18° (↑50% from baseline)"
-          />
-          <AthleteCardEnhanced 
-            name="Emily Davis" 
-            age="15" 
-            school="West Side Academy"
-            status="green"
-            quickMetric="All metrics normal"
-          />
-          <AthleteCardEnhanced 
-            name="Mike Chen" 
-            age="17" 
-            school="Central HS"
-            status="monitor"
-            quickMetric="Hip flexion: slight decrease"
-          />
-          <AthleteCardEnhanced 
-            name="Jessica Lee" 
-            age="16" 
-            school="East Valley HS"
-            status="green"
-            quickMetric="All metrics normal"
-          />
-          <AthleteCardEnhanced 
-            name="Tom Rodriguez" 
-            age="15" 
-            school="Central HS"
-            status="green"
-            injuryFlag={true}
-            quickMetric="Cleared to train (ankle)"
-          />
-          <AthleteCardEnhanced 
-            name="Anna Martinez" 
-            age="16" 
-            school="West Side Academy"
-            status="alert"
-            quickMetric="Landing form: deviation detected"
-          />
-          <AthleteCardEnhanced 
-            name="Chris Park" 
-            age="17" 
-            school="Central HS"
-            status="green"
-            quickMetric="All metrics normal"
-          />
-          <AthleteCardEnhanced 
-            name="Lily Wang" 
-            age="15" 
-            school="East Valley HS"
-            status="monitor"
-            quickMetric="Beam: inconsistent landing"
-          />
-          <AthleteCardEnhanced 
-            name="David Kim" 
-            age="16" 
-            school="Central HS"
-            status="green"
-            quickMetric="All metrics normal"
-          />
-        </div>
+        {/* Athlete Cards Grid (from API roster) */}
+        {loading ? (
+          <div className="flex items-center justify-center py-12 text-gray-500">
+            <Loader2 className="w-8 h-8 animate-spin mr-2" />
+            Loading roster…
+          </div>
+        ) : roster.length === 0 ? (
+          <div className="text-center py-12 text-gray-500 border-2 border-dashed border-gray-300 rounded-lg">
+            No athletes in roster. Add athletes via invite or sync with backend.
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-4">
+            {roster.map((a) => (
+              <AthleteCardEnhanced
+                key={a.athlete_id}
+                name={a.athlete_name}
+                age="—"
+                school={a.activity ?? '—'}
+                status={a.status === 'alert' ? 'alert' : a.status === 'monitor' ? 'monitor' : 'green'}
+                quickMetric={a.activity ?? 'View profile'}
+                onClick={() => handleSelectAthlete(a.athlete_id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </WireframeScreen>
   );
 }
 
-// Screen 5: Athlete Profile (Coach View) - HIGHER FIDELITY
+// Screen 5: Athlete Profile (Coach View) — wired to API: details, sessions, alerts, trends
 function AthleteProfileCoachEnhanced() {
+  const ctx = useCoachWebApp();
+  const athleteId = ctx?.selectedAthleteId ?? null;
+  const [details, setDetails] = useState<Record<string, unknown> | null>(null);
+  const [sessions, setSessions] = useState<unknown[]>([]);
+  const [sessionSummaries, setSessionSummaries] = useState<SessionSummary[]>([]);
+  const [alerts, setAlerts] = useState<Array<Record<string, unknown>>>([]);
+  const [trends, setTrends] = useState<AthleteTrendsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const rosterAthlete = ctx?.roster.find((a) => a.athlete_id === athleteId);
+  const athleteName = rosterAthlete?.athlete_name ?? (details?.fullName ?? details?.athlete_name ?? details?.name) as string | undefined ?? 'Athlete';
+
+  useEffect(() => {
+    if (!athleteId) {
+      setDetails(null);
+      setSessions([]);
+      setSessionSummaries([]);
+      setAlerts([]);
+      setTrends(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const [detailsRes, sessionsRes, summariesRes, alertsRes, trendsRes] = await Promise.all([
+          getAthleteDetails(athleteId).catch(() => ({})),
+          getAthleteSessions(athleteId, { limit: 20 }).then((r) => (r.sessions as unknown[]) ?? []),
+          getAthleteSessionSummaries(athleteId, { limit: 20 }).then((r) => r.summaries ?? []),
+          getAthleteAlerts(athleteId, { limit: 20 }).then((r) => ((r.alerts as unknown) as Array<Record<string, unknown>>) ?? []),
+          getAthleteTrends(athleteId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        setDetails(typeof detailsRes === 'object' && detailsRes !== null && !Array.isArray(detailsRes) ? (detailsRes as Record<string, unknown>) : null);
+        setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
+        setSessionSummaries(Array.isArray(summariesRes) ? summariesRes : []);
+        setAlerts(Array.isArray(alertsRes) ? alertsRes : []);
+        setTrends(trendsRes && typeof trendsRes === 'object' && !Array.isArray(trendsRes) && 'status' in trendsRes ? (trendsRes as AthleteTrendsResponse) : null);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load profile');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [athleteId]);
+
+  const backToRoster = () => {
+    ctx?.setSelectedAthleteId(null);
+    ctx?.setWebScreen?.(3);
+  };
+
+  if (!ctx) {
+    return (
+      <WireframeScreen annotations={{ purpose: 'Athlete profile', kpis: [], dependencies: [] }}>
+        <TopNavEnhanced title="Athlete Profile" role="Head Coach" orgName="Central High Gymnastics" />
+        <div className="p-6 text-gray-500">Use the Roster tab to select an athlete.</div>
+      </WireframeScreen>
+    );
+  }
+
+  if (!athleteId) {
+    return (
+      <WireframeScreen annotations={{ purpose: 'Athlete profile', kpis: [], dependencies: [] }}>
+        <TopNavEnhanced title="Athlete Profile" role="Head Coach" orgName="Central High Gymnastics" actions={<ButtonEnhanced variant="outline" size="small" onClick={backToRoster}>← Back to Roster</ButtonEnhanced>} />
+        <div className="p-6">
+          <p className="text-gray-600 mb-4">Select an athlete from the Roster to view their profile.</p>
+          <ButtonEnhanced variant="outline" size="medium" onClick={backToRoster}>← Back to Roster</ButtonEnhanced>
+        </div>
+      </WireframeScreen>
+    );
+  }
+
+  const statusLabel = rosterAthlete?.status === 'alert' ? 'Alert Level' : rosterAthlete?.status === 'monitor' ? 'Monitoring' : 'All Clear';
+  const hasAlerts = alerts.length > 0;
+
   return (
     <WireframeScreen
       annotations={{
         purpose: 'Detailed longitudinal view of athlete metrics, alerts, clips, and intervention history',
-        kpis: [
-          'Time spent on profile',
-          'Alert follow-up actions',
-          'Clip review rate',
-          'Recent activity interaction',
-          'Profile visit frequency per athlete',
-          'Trend chart interaction depth',
-          'Intervention log update rate',
-          'Alert history drill-down rate',
-          'Cross-metric comparison usage',
-          'Baseline adjustment frequency',
-          'Export/print profile rate',
-          'Clip playback completion rate',
-          'Time between profile views (staleness indicator)',
-          'Profile navigation pattern (which sections viewed)',
-          'Coach note addition rate',
-          'Athlete comparison tool usage'
-        ],
-        dependencies: ['Athlete metrics DB', 'Clip storage/retrieval', 'Alert history', 'Intervention log', 'Longitudinal trend engine', 'Profile activity tracking', 'Coach notes DB']
+        kpis: ['Time spent on profile', 'Alert follow-up actions', 'Clip review rate'],
+        dependencies: ['Athlete metrics DB', 'Clip storage/retrieval', 'Alert history']
       }}
     >
-      <TopNavEnhanced 
-        title="Athlete Profile" 
+      <TopNavEnhanced
+        title="Athlete Profile"
         role="Head Coach"
         orgName="Central High Gymnastics"
-        actions={
-          <ButtonEnhanced variant="outline" size="small">
-            ← Back to Roster
-          </ButtonEnhanced>
-        }
+        actions={<ButtonEnhanced variant="outline" size="small" onClick={backToRoster}>← Back to Roster</ButtonEnhanced>}
       />
       <div className="p-6">
-        {/* Athlete Header */}
-        <div className="flex items-center gap-4 mb-6 pb-6 border-b-2 border-gray-200">
-          <div className="w-24 h-24 bg-gray-200 rounded-full" />
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-2">
-              <h3 className="text-gray-900">Sarah Johnson</h3>
-              <div className="w-3 h-3 rounded-full bg-red-500" />
-              <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded">Alert Level</span>
-            </div>
-            <p className="text-gray-600 text-sm mb-2">16 • Central HS • Level 9 • Vault/Floor Specialist</p>
-            <div className="flex gap-4 text-xs text-gray-500">
-              <span>Height: 5'4"</span>
-              <span>Weight: 118 lbs</span>
-              <span>Training since: 2018</span>
-            </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-12 text-gray-500">
+            <Loader2 className="w-8 h-8 animate-spin mr-2" />
+            Loading profile…
           </div>
-          <div className="flex gap-2">
-            <ButtonEnhanced variant="outline" size="small">
-              View Clips
-            </ButtonEnhanced>
-            <ButtonEnhanced variant="outline" size="small">
-              Edit Profile
-            </ButtonEnhanced>
-          </div>
-        </div>
-
-        {/* Summary Blurb */}
-        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4 mb-6">
-          <p className="text-gray-900 text-sm mb-1"><strong>Current Status Summary:</strong></p>
-          <p className="text-gray-700 text-sm">
-            Sarah has shown increased knee valgus deviation (18° vs. baseline 12°, +50%) over the past 2 weeks,
-            particularly on vault landings. Pattern confirmed across 3 sessions (6 clips). Consider form review,
-            workload adjustment, or PT consultation.
-          </p>
-        </div>
-
-        {/* Validation Status */}
-        <div className="mb-6">
-          <ValidationStatus status="worsening" />
-        </div>
-
-        {/* Key Metrics Trends (4 pilot metrics) */}
-        <div className="mb-6">
-          <h4 className="text-gray-900 mb-4">Trends Over Time (4 Key Metrics)</h4>
-          <div className="grid grid-cols-2 gap-4">
-            <TrendChartEnhanced 
-              title="Knee Valgus Angle (degrees)" 
-              data={[45, 48, 50, 55, 60, 70, 75]}
-              baseline={50}
-            />
-            <TrendChartEnhanced 
-              title="Landing Knee Bend (degrees)" 
-              data={[60, 58, 62, 60, 55, 52, 50]}
-              baseline={60}
-            />
-            <TrendChartEnhanced 
-              title="Hip Flexion Range (degrees)" 
-              data={[50, 52, 48, 50, 48, 45, 42]}
-              baseline={50}
-            />
-            <TrendChartEnhanced 
-              title="Height Off Surface (inches)" 
-              data={[50, 52, 55, 58, 60, 58, 55]}
-              baseline={50}
-            />
-          </div>
-        </div>
-
-        {/* Alert History */}
-        <div className="mb-6">
-          <h4 className="text-gray-900 mb-4">Alert History</h4>
-          <div className="space-y-3">
-            {[
-              { 
-                date: '2 days ago', 
-                type: 'alert', 
-                message: 'Knee valgus deviation - Vault landing', 
-                confidence: 'high' as const,
-                action: 'Monitoring'
-              },
-              { 
-                date: '5 days ago', 
-                type: 'info', 
-                message: 'Landing form improvement noted', 
-                confidence: 'medium' as const,
-                action: 'Resolved'
-              },
-              { 
-                date: '1 week ago', 
-                type: 'alert', 
-                message: 'Reduced hip flexion - Floor routine', 
-                confidence: 'medium' as const,
-                action: 'Adjusted training'
-              },
-            ].map((alert, i) => (
-              <div key={i} className="border-2 border-gray-300 rounded-lg p-4 flex items-start justify-between bg-white hover:border-gray-400 cursor-pointer transition-colors">
-                <div className="flex items-start gap-3 flex-1">
-                  <div className={`w-2 h-2 rounded-full mt-2 ${
-                    alert.type === 'alert' ? 'bg-red-500' : 'bg-blue-500'
-                  }`} />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-gray-900 text-sm">{alert.message}</p>
-                      <ConfidenceChip level={alert.confidence} />
-                    </div>
-                    <p className="text-gray-500 text-xs">{alert.date} • Action: {alert.action}</p>
-                  </div>
+        ) : error ? (
+          <div className="p-4 bg-red-50 border-2 border-red-200 rounded-lg text-red-800 text-sm mb-6">{error}</div>
+        ) : (
+          <>
+            <div className="flex items-center gap-4 mb-6 pb-6 border-b-2 border-gray-200">
+              <div className="w-24 h-24 bg-gray-200 rounded-full" />
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="text-gray-900">{athleteName}</h3>
+                  {hasAlerts && (
+                    <>
+                      <div className="w-3 h-3 rounded-full bg-red-500" />
+                      <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded">{statusLabel}</span>
+                    </>
+                  )}
                 </div>
-                <button className="text-gray-500 text-sm hover:text-gray-700">View →</button>
+                <p className="text-gray-600 text-sm mb-2">{rosterAthlete?.activity ?? (details?.activity as string) ?? '—'}</p>
+                <div className="flex gap-4 text-xs text-gray-500">
+                  {(details?.height != null || details?.age != null) && <span>{[details.height, details.age].filter((x) => x != null).map(String).join(' • ')}</span>}
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Intervention Log */}
-        <div>
-          <h4 className="text-gray-900 mb-4">Intervention Log</h4>
-          <div className="border-2 border-gray-300 rounded-lg p-4 bg-white">
-            <div className="space-y-3 text-sm">
-              <div className="flex gap-3">
-                <span className="text-gray-500 w-24">Jan 2, 2026</span>
-                <span className="text-gray-700">Reduced vault reps from 12 to 8 per session</span>
-              </div>
-              <div className="flex gap-3">
-                <span className="text-gray-500 w-24">Dec 28, 2025</span>
-                <span className="text-gray-700">Added strengthening exercises for knee stability</span>
-              </div>
-              <div className="flex gap-3">
-                <span className="text-gray-500 w-24">Dec 20, 2025</span>
-                <span className="text-gray-700">Consulted with PT - cleared for full training</span>
+              <div className="flex gap-2">
+                <ButtonEnhanced
+                  variant="outline"
+                  size="small"
+                  onClick={() => {
+                    if (alerts.length > 0) {
+                      const first = alerts[0] as Record<string, unknown>;
+                      ctx?.setSelectedAlertId?.(String(first._id ?? first.alert_id ?? 0));
+                      ctx?.setWebScreen?.(8);
+                    } else {
+                      ctx?.setWebScreen?.(7);
+                    }
+                  }}
+                >
+                  View Clips
+                </ButtonEnhanced>
               </div>
             </div>
-          </div>
-        </div>
+
+            {hasAlerts && (
+              <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4 mb-6">
+                <p className="text-gray-900 text-sm mb-1"><strong>Current Status Summary:</strong></p>
+                <p className="text-gray-700 text-sm">
+                  {alerts.length} alert{alerts.length !== 1 ? 's' : ''} on file. Review alert history and evidence below.
+                </p>
+              </div>
+            )}
+
+            {hasAlerts && <div className="mb-6"><ValidationStatus status="worsening" /></div>}
+
+            {trends?.status === 'success' && trends.trends && trends.trends.length > 0 && (
+              <AthleteTrendsCards
+                trends={trends.trends}
+                athleteName={trends.athlete_name ?? athleteName}
+                title="Trends"
+              />
+            )}
+
+            <div className="mb-6">
+              <h4 className="text-gray-900 mb-4">Alert History ({alerts.length})</h4>
+              {alerts.length === 0 ? (
+                <p className="text-gray-500 text-sm">No alerts for this athlete.</p>
+              ) : (
+                <div className="space-y-3">
+                  {alerts.slice(0, 10).map((alert, i) => (
+                    <div key={i} className="border-2 border-gray-300 rounded-lg p-4 flex items-start justify-between bg-white hover:border-gray-400 cursor-pointer transition-colors">
+                      <div className="flex-1">
+                        <p className="text-gray-900 text-sm">{getInsightDisplayLabel(String(alert.insight_id ?? alert.alert_type ?? 'alert'))}</p>
+                        <p className="text-gray-500 text-xs">{String(alert.created_at ?? alert.updated_at ?? '—')}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-gray-500 text-sm hover:text-gray-700"
+                        onClick={() => { ctx.setSelectedAlertId(String(alert._id ?? alert.alert_id ?? i)); ctx.setWebScreen?.(8); }}
+                      >
+                        View →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6">
+              {sessionSummaries.length > 0 ? (
+                <SessionSummaryCards
+                  summaries={sessionSummaries}
+                  title="Session Summaries"
+                  maxCards={10}
+                />
+              ) : sessions.length === 0 ? (
+                <>
+                  <h4 className="text-gray-900 font-semibold mb-3">Session Summaries</h4>
+                  <p className="text-gray-500 text-sm">No sessions yet.</p>
+                </>
+              ) : (
+                <>
+                  <h4 className="text-gray-900 font-semibold mb-3">Sessions ({sessions.length})</h4>
+                  <div className="space-y-2 text-sm">
+                    {sessions.slice(0, 5).map((s: unknown, i: number) => {
+                      const sess = s as Record<string, unknown>;
+                      const streamUrl = sess.cloudflare_stream_url as string | undefined;
+                      return (
+                        <div key={i} className="border-2 border-gray-200 rounded-xl p-3 bg-white">
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="font-medium text-gray-900 truncate">{String(sess.session_id ?? sess.timestamp ?? 'Session')}</span>
+                            <span className="text-gray-500 text-xs truncate">{String(sess.activity ?? sess.technique ?? '')}</span>
+                          </div>
+                          {streamUrl && (
+                            <div className="mt-2 pt-2 border-t border-gray-100">
+                              <a href={streamUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 text-xs break-all">
+                                {streamUrl}
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
       </div>
       <MandatoryFooter />
     </WireframeScreen>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Camera,
   Video,
@@ -50,31 +50,89 @@ import { StreamVideoPlayer } from '../StreamVideoPlayer';
 import { LiveCameraFeed } from '../LiveCameraFeed';
 import { LiveCameraWSFeed } from '../LiveCameraWSFeed';
 import { AlertBaselinesDisplay, AthleteBaselinesDisplay, type BaselineDocument } from '../AlertBaselinesDisplay';
+import { useCoachPreferences } from '../../contexts/CoachPreferencesContext';
+import { uploadVideoWithSSE, uploadFramesWithSSE, type LiveCameraSSEEvent } from '../../services/liveCameraUpload';
 
 const CLOUDFLARE_TEST_VIDEO_ID = '325aefecad13e675e5066ed181dd03bf';
 
-// Mobile Record Video Screen
-export function MobileRecordVideo({ 
-  onStartLiveSession, 
-  onNavigate 
-}: { 
+const VIDEO_ACCEPT = 'video/mp4,video/quicktime,video/x-msvideo,.mp4,.mov,.avi';
+const IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp';
+const VIDEO_AND_IMAGE_ACCEPT = `${VIDEO_ACCEPT},${IMAGE_ACCEPT}`;
+const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+
+function isVideoFile(file: File): boolean {
+  return ['video/mp4', 'video/quicktime', 'video/x-msvideo'].includes(file.type) || /\.(mp4|mov|avi)$/i.test(file.name);
+}
+function isImageFile(file: File): boolean {
+  return ['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || /\.(jpg|jpeg|png|webp)$/i.test(file.name);
+}
+
+// Mobile Record Video Screen — same record functionality as coach web: upload + live camera, with athlete context
+export function MobileRecordVideo({
+  onStartLiveSession,
+  onNavigate,
+  athleteId,
+  athleteName,
+}: {
   onStartLiveSession?: () => void;
   onNavigate?: (screen: number) => void;
+  /** When set (athlete or coach-selected), live stream and upload are tagged with this athlete (same as web) */
+  athleteId?: string | null;
+  athleteName?: string | null;
 }) {
-  const [cameraFeedStopped, setCameraFeedStopped] = useState(false);
-  const [cameraStopping, setCameraStopping] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
-  const handleStopRecording = async () => {
-    if (cameraStopping || cameraFeedStopped) return;
-    setCameraStopping(true);
-    try {
-      await stopLiveCamera();
-      setCameraFeedStopped(true);
-    } catch (e) {
-      console.warn('Stop live camera failed:', e);
-      setCameraFeedStopped(true); // still stop the feed locally
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    e.target.value = '';
+    if (!files?.length) return;
+    const file = files[0];
+    const asVideo = isVideoFile(file);
+    const asImage = isImageFile(file);
+    if (!asVideo && !asImage) {
+      setUploadError('Choose a video (MP4, MOV, AVI) or image (JPG, PNG, WebP).');
+      return;
     }
-    setCameraStopping(false);
+    if (asVideo && file.size > MAX_VIDEO_BYTES) {
+      setUploadError('Video must be under 500MB.');
+      return;
+    }
+    if (asImage && file.size > MAX_IMAGE_BYTES) {
+      setUploadError('Each image must be under 50MB.');
+      return;
+    }
+    setUploadError(null);
+    setUploadStatus('uploading');
+    setUploadProgress(file.name);
+    const athlete = (athleteId || athleteName) ? { athlete_id: athleteId ?? undefined, athlete_name: athleteName ?? undefined } : undefined;
+    try {
+      if (asVideo) {
+        const result = await uploadVideoWithSSE(
+          { video: file, athlete_id: athlete?.athlete_id, athlete_name: athlete?.athlete_name },
+          (_event: LiveCameraSSEEvent) => {}
+        );
+        if (result.error) throw new Error(result.error);
+      } else {
+        const fileList = Array.from(files).filter(isImageFile);
+        const result = await uploadFramesWithSSE(
+          { files: fileList, athlete_id: athlete?.athlete_id, athlete_name: athlete?.athlete_name },
+          (_event: LiveCameraSSEEvent) => {}
+        );
+        if (result.error) throw new Error(result.error);
+      }
+      setUploadStatus('success');
+      setUploadProgress(null);
+    } catch (err) {
+      setUploadStatus('error');
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+      setUploadProgress(null);
+    }
   };
 
   return (
@@ -82,7 +140,7 @@ export function MobileRecordVideo({
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-4 py-3">
         <div className="flex items-center gap-3">
-          <button 
+          <button
             onClick={() => onNavigate?.(1)}
             className="w-9 h-9 flex items-center justify-center active:bg-gray-100 rounded-lg"
           >
@@ -92,89 +150,46 @@ export function MobileRecordVideo({
         </div>
       </div>
 
-      {/* Main Options */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <p className="text-gray-600 text-sm mb-6">Choose how to add video</p>
-
-        {/* Record Live - commented out for now */}
-        {/* <button 
-          onClick={onStartLiveSession}
-          className="w-full bg-blue-600 rounded-2xl p-6 mb-4 active:bg-blue-700"
+      {/* Same options as coach web: Upload + Live camera */}
+      <div className="shrink-0 px-4 py-3 bg-white border-b border-gray-200 flex flex-wrap gap-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={VIDEO_AND_IMAGE_ACCEPT}
+          multiple
+          onChange={handleFileChange}
+          className="hidden"
+          aria-label="Upload video or images"
+        />
+        <button
+          type="button"
+          onClick={handleUploadClick}
+          disabled={uploadStatus === 'uploading'}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-gray-300 bg-white text-gray-900 font-medium text-sm active:bg-gray-50 disabled:opacity-60"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-white bg-opacity-20 rounded-2xl flex items-center justify-center flex-shrink-0">
-              <Camera className="w-8 h-8 text-white" />
-            </div>
-            <div className="text-left flex-1">
-              <p className="text-white font-medium mb-1">Record Live Session</p>
-              <p className="text-blue-100 text-sm">Start in-app recording with AI analysis</p>
-            </div>
-            <ChevronRight className="w-6 h-6 text-white flex-shrink-0" />
-          </div>
-        </button> */}
+          {uploadStatus === 'uploading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          Upload video or images
+        </button>
+        {uploadStatus === 'success' && <span className="text-green-600 text-sm py-2">Upload complete</span>}
+        {uploadStatus === 'error' && uploadError && <span className="text-red-600 text-sm py-2">{uploadError}</span>}
+        {uploadProgress && uploadStatus === 'uploading' && <span className="text-gray-500 text-xs py-2">{uploadProgress}</span>}
+      </div>
 
-        {/* Upload Video - commented out for now */}
-        {/* <button className="w-full bg-white border-2 border-gray-300 rounded-2xl p-6 active:bg-gray-50">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center flex-shrink-0">
-              <Upload className="w-8 h-8 text-gray-600" />
-            </div>
-            <div className="text-left flex-1">
-              <p className="text-gray-900 font-medium mb-1">Upload Video</p>
-              <p className="text-gray-600 text-sm">From camera roll</p>
-            </div>
-            <ChevronRight className="w-6 h-6 text-gray-400 flex-shrink-0" />
-          </div>
-        </button> */}
-
-        {/* Live Camera Test + Stop Recording - commented out for now */}
-        {/* <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <p className="text-gray-700 text-sm font-medium flex items-center gap-2">
-              <Camera className="w-4 h-4 text-gray-500" />
-              Live Camera Test
-            </p>
-            {!cameraFeedStopped ? (
-              <button
-                type="button"
-                onClick={handleStopRecording}
-                disabled={cameraStopping}
-                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-100 active:bg-red-200 border border-red-200 transition-colors disabled:opacity-60 disabled:pointer-events-none min-h-[44px]"
-              >
-                {cameraStopping ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Square className="w-4 h-4 fill-current" />
-                )}
-                <span className="text-sm font-medium">Stop recording</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-gray-100 text-gray-500">
-                <div className="w-2 h-2 rounded-full bg-gray-400" />
-                <span className="text-sm font-medium">Stopped</span>
-              </div>
-            )}
-          </div>
-          <LiveCameraFeed
-            aspectRatio="aspect-video"
-            showLabel={false}
-            stopped={cameraFeedStopped}
-          />
-          <p className="text-gray-500 text-xs mt-2">
-            Feed from Athlete Coach API (port 8004)
+      {/* Main Area: full-width live camera + metrics (same as coach web; athlete/coach context passed for tagging) */}
+      <div className="flex-1 flex flex-col bg-black">
+        <div className="px-4 pt-4 pb-2">
+          <p className="text-gray-200 text-xs">
+            Live camera with real-time ACL and landing metrics. Same as coach web.
           </p>
-        </div> */}
-
-        {/* Cloudflare Stream Player Test */}
-        {/* WebSocket Feed Test */}
-        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-2xl shadow-sm">
-          <LiveCameraWSFeed 
+        </div>
+        <div className="flex-1 px-0 pb-2">
+          <LiveCameraWSFeed
+            className="h-full"
             showMetrics={true}
             showAthleteInfo={true}
+            athleteId={athleteId ?? undefined}
+            athleteName={athleteName ?? undefined}
           />
-          <p className="text-gray-500 text-xs mt-2">
-            WebSocket stream with real-time pose estimation (port 8010)
-          </p>
         </div>
       </div>
 
@@ -1297,6 +1312,8 @@ export function MobileQuickActions({
   onNavigate?: (screen: number) => void;
   isAthlete?: boolean;
 }) {
+  const { coachUseWebApp, setCoachUseWebApp } = useCoachPreferences();
+
   return (
     <div className="h-full flex flex-col bg-gray-50">
       {/* Header */}
@@ -1304,8 +1321,35 @@ export function MobileQuickActions({
         <h1 className="text-lg text-gray-900">Quick Actions</h1>
       </div>
 
+      {/* Coach: Web app version toggle (Figma: coach profile preference) */}
+      {!isAthlete && (
+        <div className="bg-white border-b border-gray-200 px-4 py-3">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Use web app version</p>
+              <p className="text-xs text-gray-500 mt-0.5">Switch to desktop-style coach view</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={coachUseWebApp}
+              onClick={() => setCoachUseWebApp(!coachUseWebApp)}
+              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                coachUseWebApp ? 'bg-blue-600' : 'bg-gray-200'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition ${
+                  coachUseWebApp ? 'translate-x-5' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Action Grid */}
-      <div className="flex-1 px-4 py-6">
+      <div className="flex-1 px-4 py-6 overflow-y-auto">
         <div className="grid grid-cols-2 gap-4">
           <button
             onClick={() => onNavigate?.(3)}

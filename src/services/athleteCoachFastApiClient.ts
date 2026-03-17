@@ -37,6 +37,98 @@ export interface LoginResponse {
   token?: string;
 }
 
+/** Session summary issues_summary (from _session_to_summary) */
+export interface SessionSummaryIssuesSummary {
+  form_issues?: string[];
+  form_issue_count?: number;
+  acl_risk_level?: string;
+  has_high_risk_acl?: boolean;
+  acl_high_risk_count?: number;
+  acl_moderate_risk_count?: number;
+  acl_total_risk_count?: number;
+  insight_count?: number;
+  insight_previews?: string[];
+}
+
+/** Session summary metrics_summary subset */
+export interface SessionSummaryMetricsSummary {
+  acl_risk_score?: number;
+  height_off_floor_meters?: number;
+  body_alignment_degrees?: number;
+  knee_valgus?: number;
+  flight_phase?: boolean;
+  in_landing_phase?: boolean;
+  [key: string]: unknown;
+}
+
+/** Segment info in session summary */
+export interface SessionSummarySegment {
+  segment_number?: number;
+  segment_start_frame?: number;
+  segment_end_frame?: number;
+  video_clip_count?: number;
+}
+
+/** Single session summary for client display (GET session-summaries / athlete session-summaries) */
+export interface SessionSummary {
+  session_id?: string;
+  athlete_id?: string;
+  athlete_name?: string;
+  timestamp?: string;
+  activity?: string;
+  technique?: string;
+  issues_summary?: SessionSummaryIssuesSummary;
+  metrics_summary?: SessionSummaryMetricsSummary;
+  cloudflare_stream_url?: string;
+  segment?: SessionSummarySegment;
+}
+
+/** GET /api/session-summaries response */
+export interface SessionSummariesResponse {
+  status: string;
+  count?: number;
+  summaries?: SessionSummary[];
+}
+
+/** GET /api/athlete/{athlete_id}/session-summaries response */
+export interface AthleteSessionSummariesResponse {
+  status: string;
+  athlete_id?: string;
+  count?: number;
+  summaries?: SessionSummary[];
+}
+
+/** Condensed trend item (GET /api/athlete/{id}/trends, default response) */
+export interface TrendItemStats {
+  first_mean?: number;
+  second_mean?: number;
+  change?: number;
+}
+
+export interface TrendItem {
+  id?: string;
+  metric_type?: string;
+  metric_label?: string;
+  technique?: string | null;
+  observation?: string;
+  status?: 'improving' | 'declining' | 'unchanged' | 'stable';
+  direction?: 'increasing' | 'decreasing' | 'stable';
+  change_percent?: number;
+  session_count?: number;
+  coaching_highlights?: string[];
+  stats?: TrendItemStats;
+}
+
+/** GET /api/athlete/{athlete_id}/trends response (condensed) */
+export interface AthleteTrendsResponse {
+  status: string;
+  athlete_id?: string;
+  athlete_name?: string | null;
+  count?: number;
+  trends?: TrendItem[];
+  message?: string;
+}
+
 type RequestOptions = {
   method?: string;
   body?: object | string | FormData;
@@ -226,9 +318,16 @@ export class AthleteCoachFastApiClient {
     });
   }
 
-  async getAthleteTrends(athleteId: string, params: { activity?: string } = {}) {
+  /** GET /api/athlete/{athlete_id}/trends — condensed trends for UI. Use full=1 for raw payload. */
+  async getAthleteTrends(
+    athleteId: string,
+    params: { activity?: string; technique?: string; limit?: number; full?: boolean } = {}
+  ) {
     return this._get(`/api/athlete/${encodeURIComponent(athleteId)}/trends`, {
       activity: params.activity,
+      technique: params.technique,
+      limit: params.limit ?? 20,
+      full: params.full,
     });
   }
 
@@ -265,6 +364,42 @@ export class AthleteCoachFastApiClient {
     return this._post('/api/athlete/add-photo-upload', fd);
   }
 
+  /**
+   * Coach-driven manual athlete creation (no invite/signup flow).
+   * POST /api/manual-athlete — creates user, updates profile, and optionally adds a photo URL.
+   *
+   * Returns backend JSON:
+   * {
+   *   status: "success",
+   *   message: "Manual athlete created and profile updated",
+   *   athlete_id: "athlete_00X",
+   *   user_create: { ... },
+   *   profile_update: { ... },
+   *   photo: { ... } // if photo_url provided
+   * }
+   */
+  async manualCreateAthlete(params: {
+    full_name: string;
+    email: string;
+    password: string;
+    institution?: string;
+    height?: number;
+    weight?: number;
+    previous_injuries?: string;
+    photo_url?: string;
+  }): Promise<Record<string, unknown>> {
+    return this._post('/api/manual-athlete', {
+      full_name: params.full_name,
+      email: params.email,
+      password: params.password,
+      institution: params.institution,
+      height: params.height,
+      weight: params.weight,
+      previous_injuries: params.previous_injuries,
+      photo_url: params.photo_url,
+    }) as unknown as Promise<Record<string, unknown>>;
+  }
+
   // ——— Sessions ———
   async getAllSessions(
     params: { limit?: number; activity?: string; athlete_id?: string } = {}
@@ -278,6 +413,33 @@ export class AthleteCoachFastApiClient {
 
   async getSession(sessionId: string) {
     return this._get(`/api/session/${encodeURIComponent(sessionId)}`);
+  }
+
+  /**
+   * GET /api/session-summaries — high-level session summaries with issues_summary, metrics_summary, cloudflare_stream_url.
+   * Query: limit (default 50), optional activity, optional athlete_id.
+   */
+  async getSessionSummaries(params: { limit?: number; activity?: string; athlete_id?: string } = {}) {
+    return this._get('/api/session-summaries', {
+      limit: params.limit ?? 50,
+      activity: params.activity,
+      athlete_id: params.athlete_id,
+    });
+  }
+
+  /**
+   * GET /api/athlete/{athlete_id}/session-summaries — session summaries for one athlete.
+   * Query: limit (default 50), optional activity, optional technique.
+   */
+  async getAthleteSessionSummaries(
+    athleteId: string,
+    params: { limit?: number; activity?: string; technique?: string } = {}
+  ) {
+    return this._get(`/api/athlete/${encodeURIComponent(athleteId)}/session-summaries`, {
+      limit: params.limit ?? 50,
+      activity: params.activity,
+      technique: params.technique,
+    });
   }
 
   async getInsightsForSession(sessionId: string) {

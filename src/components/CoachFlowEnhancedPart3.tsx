@@ -5,10 +5,20 @@ import {
   ButtonEnhanced,
   FormFieldEnhanced,
 } from './EnhancedComponents';
-import { Upload, Plus, Download, Settings } from 'lucide-react';
+import { Upload, Plus, Download, Settings, Loader2 } from 'lucide-react';
+import { useCoachWebApp } from '../contexts/CoachWebAppContext';
 
-// Screen 10: Team Dashboard
+// Screen 10: Team Dashboard — wired to API: roster + alerts from context
 export function TeamDashboardEnhanced() {
+  const ctx = useCoachWebApp();
+  const roster = ctx?.roster ?? [];
+  const alerts = ctx?.alerts ?? [];
+  const loading = ctx?.rosterLoading ?? ctx?.alertsLoading ?? false;
+  const alertCount = alerts.length;
+  const alertLevel = roster.filter((a) => a.status === 'alert').length;
+  const monitoring = roster.filter((a) => a.status === 'monitor').length;
+  const allClear = roster.filter((a) => !a.status || a.status === 'normal').length;
+
   return (
     <WireframeScreen
       annotations={{
@@ -28,27 +38,26 @@ export function TeamDashboardEnhanced() {
         }
       />
       <div className="p-6">
-        {/* Summary Tiles */}
         <div className="grid grid-cols-4 gap-4 mb-6">
           <div className="bg-white border-2 border-gray-300 rounded-lg p-4">
             <p className="text-gray-500 text-sm mb-1">Total Athletes</p>
-            <p className="text-3xl text-gray-900 mb-2">12</p>
+            <p className="text-3xl text-gray-900 mb-2">{loading ? '—' : roster.length}</p>
             <p className="text-xs text-gray-600">Active roster</p>
           </div>
           <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
             <p className="text-red-700 text-sm mb-1">Alert Level</p>
-            <p className="text-3xl text-red-700 mb-2">2</p>
-            <p className="text-xs text-red-600">↑ +1 this week</p>
+            <p className="text-3xl text-red-700 mb-2">{loading ? '—' : alertLevel}</p>
+            <p className="text-xs text-red-600">Active alerts: {alertCount}</p>
           </div>
           <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
             <p className="text-yellow-700 text-sm mb-1">Monitoring</p>
-            <p className="text-3xl text-yellow-700 mb-2">3</p>
+            <p className="text-3xl text-yellow-700 mb-2">{loading ? '—' : monitoring}</p>
             <p className="text-xs text-yellow-600">No change</p>
           </div>
           <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
             <p className="text-green-700 text-sm mb-1">All Clear</p>
-            <p className="text-3xl text-green-700 mb-2">7</p>
-            <p className="text-xs text-green-600">↓ -1 this week</p>
+            <p className="text-3xl text-green-700 mb-2">{loading ? '—' : allClear}</p>
+            <p className="text-xs text-green-600">All clear</p>
           </div>
         </div>
 
@@ -145,74 +154,61 @@ export function TeamDashboardEnhanced() {
           </div>
         </div>
 
-        {/* Athletes Requiring Attention */}
         <div>
-          <h4 className="text-gray-900 mb-4">Athletes Requiring Attention (2)</h4>
-          <div className="space-y-3">
-            <div className="border-2 border-red-300 bg-red-50 rounded-lg p-4 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-gray-200 rounded-full" />
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-gray-900">Sarah Johnson</p>
-                    <span className="px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">
-                      High Priority
-                    </span>
-                  </div>
-                  <p className="text-gray-700 text-sm mb-1">
-                    Knee valgus deviation - 3 alerts in 3 days
-                  </p>
-                  <p className="text-gray-600 text-xs">
-                    Last action: Monitoring (2 days ago) • Status: Worsening
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <ButtonEnhanced variant="outline" size="small">
-                  View Profile
-                </ButtonEnhanced>
-                <ButtonEnhanced variant="danger" size="small">
-                  Take Action
-                </ButtonEnhanced>
-              </div>
+          <h4 className="text-gray-900 mb-4">Athletes Requiring Attention ({alerts.length > 0 ? alerts.length : 0})</h4>
+          {loading ? (
+            <div className="flex items-center text-gray-500 py-4">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+              Loading…
             </div>
-
-            <div className="border-2 border-red-300 bg-red-50 rounded-lg p-4 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-gray-200 rounded-full" />
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-gray-900">Anna Martinez</p>
-                    <span className="px-2 py-0.5 bg-yellow-200 text-yellow-800 text-xs rounded">
-                      Medium Priority
-                    </span>
+          ) : alerts.length === 0 ? (
+            <p className="text-gray-500 text-sm py-4">No alerts. All athletes clear.</p>
+          ) : (
+            <div className="space-y-3">
+              {alerts.slice(0, 5).map((alert, i) => {
+                const id = alert._id ?? alert.alert_id ?? i;
+                const name = alert.session_metadata?.athlete_name ?? alert.athlete_id ?? 'Athlete';
+                const insightId = alert.insight_id ?? alert.alert_type ?? 'alert';
+                return (
+                  <div key={String(id)} className="border-2 border-red-300 bg-red-50 rounded-lg p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 bg-gray-200 rounded-full" />
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-gray-900">{String(name)}</p>
+                          <span className="px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">
+                            Alert
+                          </span>
+                        </div>
+                        <p className="text-gray-700 text-sm mb-1">{String(insightId)}</p>
+                        <p className="text-gray-600 text-xs">{alert.created_at ?? ''}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <ButtonEnhanced variant="outline" size="small" onClick={() => { ctx?.setSelectedAthleteId?.(String(alert.athlete_id)); ctx?.setWebScreen?.(4); }}>
+                        View Profile
+                      </ButtonEnhanced>
+                      <ButtonEnhanced variant="danger" size="small" onClick={() => { ctx?.setSelectedAlertId?.(String(id)); ctx?.setWebScreen?.(8); }}>
+                        View Alert
+                      </ButtonEnhanced>
+                    </div>
                   </div>
-                  <p className="text-gray-700 text-sm mb-1">
-                    Landing form inconsistency - 2 alerts this week
-                  </p>
-                  <p className="text-gray-600 text-xs">
-                    Last action: Form review scheduled • Status: Unchanged
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <ButtonEnhanced variant="outline" size="small">
-                  View Profile
-                </ButtonEnhanced>
-                <ButtonEnhanced variant="primary" size="small">
-                  Review
-                </ButtonEnhanced>
-              </div>
+                );
+              })}
             </div>
-          </div>
+          )}
         </div>
       </div>
     </WireframeScreen>
   );
 }
 
-// Screen 11: Settings / Roster Admin
+// Screen 11: Settings / Roster Admin — wired to API: roster from context
 export function SettingsRosterAdminEnhanced() {
+  const ctx = useCoachWebApp();
+  const roster = ctx?.roster ?? [];
+  const loading = ctx?.rosterLoading ?? false;
+
   return (
     <WireframeScreen
       annotations={{
@@ -228,7 +224,6 @@ export function SettingsRosterAdminEnhanced() {
       />
       <div className="p-6">
         <div className="flex gap-6">
-          {/* Sidebar Navigation */}
           <div className="w-56 border-r-2 border-gray-200 pr-6">
             <div className="space-y-2">
               <div className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm cursor-pointer">
@@ -252,11 +247,9 @@ export function SettingsRosterAdminEnhanced() {
             </div>
           </div>
 
-          {/* Main Content */}
           <div className="flex-1">
             <h3 className="text-gray-900 mb-6">Roster Administration</h3>
 
-            {/* Bulk Actions */}
             <div className="mb-8">
               <p className="text-gray-700 text-sm mb-4">Bulk Actions</p>
               <div className="flex gap-3">
@@ -275,10 +268,9 @@ export function SettingsRosterAdminEnhanced() {
               </div>
             </div>
 
-            {/* Individual Athletes Management */}
             <div className="mb-8">
               <div className="flex items-center justify-between mb-4">
-                <p className="text-gray-700 text-sm">Manage Athletes (12 active, 3 archived)</p>
+                <p className="text-gray-700 text-sm">Manage Athletes ({loading ? '…' : roster.length} active)</p>
                 <div className="flex gap-2">
                   <button className="px-3 py-1.5 bg-gray-900 text-white rounded text-sm">
                     Active
@@ -289,29 +281,30 @@ export function SettingsRosterAdminEnhanced() {
                 </div>
               </div>
               
+              {loading ? (
+                <div className="flex items-center text-gray-500 py-4">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Loading roster…
+                </div>
+              ) : (
               <div className="space-y-2">
-                {[
-                  { name: 'Sarah Johnson', age: '16', event: 'Vault/Floor', status: 'Active' },
-                  { name: 'Emily Davis', age: '15', event: 'Bars/Beam', status: 'Active' },
-                  { name: 'Mike Chen', age: '17', event: 'All-Around', status: 'Active' },
-                  { name: 'Jessica Lee', age: '16', event: 'Floor', status: 'Active' },
-                ].map((athlete, i) => (
+                {roster.map((a) => (
                   <div
-                    key={i}
+                    key={a.athlete_id}
                     className="border-2 border-gray-300 rounded-lg p-4 flex items-center justify-between bg-white hover:border-gray-400 transition-colors"
                   >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-gray-200 rounded-full" />
                       <div>
-                        <p className="text-gray-900 text-sm">{athlete.name}</p>
+                        <p className="text-gray-900 text-sm">{a.athlete_name}</p>
                         <p className="text-gray-600 text-xs">
-                          {athlete.age} • {athlete.event} • {athlete.status}
+                          {a.activity ?? '—'} • {a.status ?? 'Active'}
                         </p>
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <ButtonEnhanced variant="outline" size="small">
-                        Edit
+                      <ButtonEnhanced variant="outline" size="small" onClick={() => { ctx?.setSelectedAthleteId?.(a.athlete_id); ctx?.setWebScreen?.(4); }}>
+                        View Profile
                       </ButtonEnhanced>
                       <ButtonEnhanced variant="outline" size="small">
                         Archive
@@ -320,6 +313,7 @@ export function SettingsRosterAdminEnhanced() {
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Add New Athlete */}
