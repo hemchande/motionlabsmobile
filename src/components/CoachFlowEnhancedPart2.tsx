@@ -635,7 +635,9 @@ export function RecordUploadVideoEnhanced() {
               Recent Sessions (from API)
               {sessionFilterAthleteId && (
                 <span className="text-gray-500 font-normal text-sm ml-2">
-                  — {ctx?.roster?.find((a) => a.athlete_id === sessionFilterAthleteId)?.athlete_name ?? sessionFilterAthleteId}
+                  — {sessionFilterAthleteId === '__unknown__'
+                    ? 'Unknown / no athlete'
+                    : ctx?.roster?.find((a) => a.athlete_id === sessionFilterAthleteId)?.athlete_name ?? sessionFilterAthleteId}
                 </span>
               )}
             </h4>
@@ -647,6 +649,7 @@ export function RecordUploadVideoEnhanced() {
                 className="border-2 border-gray-300 rounded-lg px-3 py-1.5 bg-white text-gray-900 text-sm min-w-[160px]"
               >
                 <option value="">All athletes</option>
+                <option value="__unknown__">Unknown / no athlete</option>
                 {(ctx?.roster ?? []).map((a) => (
                   <option key={a.athlete_id} value={a.athlete_id}>
                     {a.athlete_name || a.athlete_id}
@@ -663,12 +666,18 @@ export function RecordUploadVideoEnhanced() {
           ) : (() => {
             const filteredSummaries =
               sessionFilterAthleteId != null && sessionFilterAthleteId !== ''
-                ? sessionSummaries.filter((s) => (s.athlete_id ?? '').trim() === sessionFilterAthleteId.trim())
+                ? sessionSummaries.filter((s) =>
+                    sessionFilterAthleteId === '__unknown__'
+                      ? !s.athlete_id || s.athlete_id.trim() === ''
+                      : (s.athlete_id ?? '').trim() === sessionFilterAthleteId.trim()
+                  )
                 : sessionSummaries;
             const filteredSessions =
               sessionFilterAthleteId != null && sessionFilterAthleteId !== ''
-                ? (sessions as Array<Record<string, unknown>>).filter(
-                    (s) => String(s.athlete_id ?? '').trim() === sessionFilterAthleteId.trim()
+                ? (sessions as Array<Record<string, unknown>>).filter((s) =>
+                    sessionFilterAthleteId === '__unknown__'
+                      ? !String(s.athlete_id ?? '').trim()
+                      : String(s.athlete_id ?? '').trim() === sessionFilterAthleteId.trim()
                   )
                 : sessions;
             return filteredSummaries.length > 0 ? (
@@ -742,7 +751,11 @@ export function RecordUploadVideoEnhanced() {
             </div>
           ) : filteredSessions.length === 0 ? (
             <p className="text-gray-500 text-sm py-4">
-              {sessionFilterAthleteId ? 'No sessions for this athlete.' : 'No sessions yet.'}
+              {sessionFilterAthleteId
+                ? sessionFilterAthleteId === '__unknown__'
+                  ? 'No sessions for unknown / no-athlete segments.'
+                  : 'No sessions for this athlete.'
+                : 'No sessions yet.'}
             </p>
           ) : (
             <div className="space-y-3">
@@ -819,11 +832,26 @@ export function LiveRecordingViewHighFi() {
 
   // Build activity log lines from live metrics
   const activityLines: { time: string; msg: string; warn?: boolean }[] = [];
-  if (latestMetrics?.movementMsg) activityLines.push({ time: 'Live', msg: latestMetrics.movementMsg });
-  if (latestMetrics?.visibilityMsg) activityLines.push({ time: 'Live', msg: latestMetrics.visibilityMsg });
-  if (latestMetrics?.phase) activityLines.push({ time: 'Phase', msg: latestMetrics.phase });
-  if (latestMetrics?.aclSummary) activityLines.push({ time: 'ACL', msg: latestMetrics.aclSummary, warn: true });
-  (latestMetrics?.formIssues ?? []).slice(0, 3).forEach((issue) => activityLines.push({ time: 'Form', msg: issue, warn: true }));
+  if (latestMetrics?.movementMsg) activityLines.push({ time: 'Live', msg: String(latestMetrics.movementMsg) });
+  if (latestMetrics?.visibilityMsg) activityLines.push({ time: 'Live', msg: String(latestMetrics.visibilityMsg) });
+  if (latestMetrics?.phase) activityLines.push({ time: 'Phase', msg: String(latestMetrics.phase) });
+  if (latestMetrics?.aclSummary) {
+    const s = latestMetrics.aclSummary as unknown;
+    let aclMsg: string;
+    if (typeof s === 'string' || typeof s === 'number' || typeof s === 'boolean') {
+      aclMsg = String(s);
+    } else if (typeof s === 'object' && s) {
+      const o = s as { total?: unknown; high?: unknown; moderate?: unknown };
+      const total = o.total ?? '—';
+      const high = o.high ?? 0;
+      const moderate = o.moderate ?? 0;
+      aclMsg = `Total: ${total}, High: ${high}, Moderate: ${moderate}`;
+    } else {
+      aclMsg = JSON.stringify(s);
+    }
+    activityLines.push({ time: 'ACL', msg: aclMsg, warn: true });
+  }
+  (latestMetrics?.formIssues ?? []).slice(0, 3).forEach((issue) => activityLines.push({ time: 'Form', msg: String(issue), warn: true }));
   if (activityLines.length === 0 && isStreaming) activityLines.push({ time: '—', msg: 'Waiting for metrics…' });
 
   return (

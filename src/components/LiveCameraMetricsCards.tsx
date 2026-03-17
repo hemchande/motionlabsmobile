@@ -159,14 +159,29 @@ function MetricCard({
   );
 }
 
-/** ACL summary block (risk-focused) */
-function ACLRiskBlock({ summary }: { summary: string }) {
+/** ACL summary block (risk-focused). Handles string or object (e.g. { total, high, moderate }). */
+function ACLRiskBlock({ summary }: { summary: unknown }) {
+  let summaryText: string;
+  if (summary == null) {
+    summaryText = '';
+  } else if (typeof summary === 'string' || typeof summary === 'number' || typeof summary === 'boolean') {
+    summaryText = String(summary);
+  } else if (typeof summary === 'object' && summary && 'total' in (summary as Record<string, unknown>)) {
+    const s = summary as { total?: unknown; high?: unknown; moderate?: unknown };
+    const total = s.total ?? '—';
+    const high = s.high ?? 0;
+    const moderate = s.moderate ?? 0;
+    summaryText = `Total: ${total}, High: ${high}, Moderate: ${moderate}`;
+  } else {
+    summaryText = JSON.stringify(summary);
+  }
+
   return (
     <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 flex items-start gap-3 border-l-4 border-l-red-500 min-h-[44px]">
       <ShieldAlert className="w-5 h-5 text-red-600 shrink-0 mt-0.5" aria-hidden />
       <div className="min-w-0">
         <p className="text-xs font-semibold text-red-800 uppercase tracking-wide">ACL</p>
-        <p className="text-sm text-red-900 mt-0.5">{summary}</p>
+        <p className="text-sm text-red-900 mt-0.5">{summaryText}</p>
       </div>
     </div>
   );
@@ -411,8 +426,24 @@ export function LiveCameraMetricsCards({
 
   const formIssueCount = formIssues?.length ?? 0;
   const hasAcl = aclSummary != null && aclSummary !== '';
+
+  let aclSummaryText = '';
+  if (hasAcl) {
+    if (typeof aclSummary === 'string' || typeof aclSummary === 'number' || typeof aclSummary === 'boolean') {
+      aclSummaryText = String(aclSummary);
+    } else if (typeof aclSummary === 'object' && aclSummary) {
+      const s = aclSummary as { total?: unknown; high?: unknown; moderate?: unknown };
+      const total = s.total ?? '—';
+      const high = s.high ?? 0;
+      const moderate = s.moderate ?? 0;
+      aclSummaryText = `Total: ${total}, High: ${high}, Moderate: ${moderate}`;
+    } else {
+      aclSummaryText = JSON.stringify(aclSummary);
+    }
+  }
+
   const summaryLine = hasAcl
-    ? `ACL: ${aclSummary}${formIssueCount > 0 ? ` · ${formIssueCount} form issue${formIssueCount !== 1 ? 's' : ''}` : ''}`
+    ? `ACL: ${aclSummaryText}${formIssueCount > 0 ? ` · ${formIssueCount} form issue${formIssueCount !== 1 ? 's' : ''}` : ''}`
     : formIssueCount > 0
       ? `${formIssueCount} form issue${formIssueCount !== 1 ? 's' : ''}`
       : displayEntries.length > 0

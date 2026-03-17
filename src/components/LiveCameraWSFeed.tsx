@@ -37,6 +37,8 @@ export function LiveCameraWSFeed({
   const previousBlobUrlRef = useRef<string | null>(null);
   /** Increments on each received frame; we only display if this frame is still the latest when we paint (skip stale) */
   const receivedSeqRef = useRef<number>(0);
+  /** Why we expect the WebSocket to close (for logging). Null = unexpected. */
+  const closingReasonRef = useRef<'manual-stop' | 'unmount' | null>(null);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -165,9 +167,19 @@ export function LiveCameraWSFeed({
           }
         })
         .on('close', () => {
+          const reason = closingReasonRef.current ?? 'unexpected';
           setIsConnected(false);
           setIsStreaming(false);
-          console.log('WebSocket closed');
+          const status = client.getStatus();
+          console.log('[LiveCameraWS] WebSocket closed', {
+            reason,
+            url: wsUrlForClient,
+            sessionId: status.sessionId,
+          });
+          if (reason === 'unexpected') {
+            setError('Connection lost. Last frame shown. Click Start to reconnect.');
+          }
+          closingReasonRef.current = null;
         })
         .on('error', (err) => {
           setError('WebSocket error. Check that the server is running.');
@@ -223,6 +235,8 @@ export function LiveCameraWSFeed({
 
   // Stop streaming and disconnect
   const stopStreaming = useCallback(async () => {
+    // Mark this as an expected/manual close so the close handler can log it clearly
+    closingReasonRef.current = 'manual-stop';
     if (clientRef.current) {
       await clientRef.current.disconnect();
       clientRef.current = null;
@@ -245,6 +259,7 @@ export function LiveCameraWSFeed({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      closingReasonRef.current = 'unmount';
       if (clientRef.current) {
         clientRef.current.disconnect();
       }

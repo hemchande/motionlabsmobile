@@ -387,6 +387,7 @@ export class LiveCameraWSClient {
           break;
 
         case 'metrics':
+        case 'live_camera_metrics': {
           this.emit('metrics', {
             frameNumber: message.frame_number,
             timestamp: message.timestamp,
@@ -395,8 +396,14 @@ export class LiveCameraWSClient {
             athlete: message.athlete_id,
             formIssues: message.form_issues,
             aclRisk: message.acl_risk,
+            movementMsg: message.movement_msg,
+            visibilityMsg: message.visibility_msg,
+            segmentsCount: message.segments_count,
+            aclSummary: message.acl_summary,
+            turnDetected: message.turn_detected,
           } as MetricsData);
           break;
+        }
 
         case 'athlete_detected':
           console.log(`👤 Athlete: ${message.athlete_name || message.athlete_id}`);
